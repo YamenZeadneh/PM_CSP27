@@ -1,0 +1,24 @@
+/* Simple, readable layout; works on a phone (360px) too */
+body { font-family: system-ui, sans-serif; background: #f4f4f6; margin: 0; color: #222; }
+main { max-width: 520px; margin: 0 auto; padding: 16px; }
+
+label { display: block; margin-bottom: 12px; font-weight: 600; font-size: 14px; }
+input { display: block; width: 100%; box-sizing: border-box; margin-top: 4px;
+        padding: 8px; font-size: 14px; border: 1px solid #bbb; border-radius: 6px; }
+
+/* One order line = item id + quantity + remove button */
+.line { display: flex; gap: 8px; margin-bottom: 8px; }
+.line input { margin-top: 0; }
+
+button { padding: 10px 14px; font-size: 14px; border: 0; border-radius: 6px;
+         background: #1a6dff; color: #fff; cursor: pointer; margin-top: 8px; }
+button.secondary { background: #666; }
+button.remove { background: #c0392b; margin-top: 0; }
+
+/* Status badge colors: green = 2xx, red = errors */
+#status { font-weight: 700; margin-bottom: 6px; }
+#status.ok { color: #1e8e3e; }
+#status.err { color: #c0392b; }
+
+pre { background: #1e1e1e; color: #ddd; padding: 12px; border-radius: 6px;
+      overflow-x: auto; white-space: pre-wrap; }

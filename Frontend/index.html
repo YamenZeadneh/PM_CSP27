@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CafeQuick API Tester</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <h1>CafeQuick API Tester</h1>
+
+    <!-- Backend address (change if uvicorn runs elsewhere) -->
+    <label>API base URL
+      <input id="apiUrl" type="text" value="http://127.0.0.1:8000">
+    </label>
+
+    <!-- Simulated SSO: sent as the X-User-Email header (see current_user in main.py) -->
+    <label>User (X-User-Email)
+      <input id="email" type="text" value="student1@uni.edu" list="seedUsers">
+      <datalist id="seedUsers"></datalist>
+    </label>
+
+    <!-- Pickup slot: step=900 seconds gives 15-minute steps -->
+    <label>Pickup slot
+      <input id="slot" type="datetime-local" step="900">
+    </label>
+
+    <!-- Order lines: 1 to 5 rows (matches max_length=5 in OrderIn) -->
+    <h2>Order lines</h2>
+    <div id="lines"></div>
+    <button id="addLine" type="button" class="secondary">+ Add line</button>
+
+    <button id="send" type="button">Place order (POST /orders)</button>
+
+    <h2>Response</h2>
+    <div id="status"></div>
+    <pre id="output">Nothing sent yet.</pre>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
