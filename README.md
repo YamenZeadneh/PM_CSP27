@@ -3,7 +3,7 @@ CafeQuick: Cafeteria Pre-Order &amp; Pickup System
 - اضفة كودات اولية عشان تكون نقطة بداية ولا اشي هون رسمي عدلو زي ما بدكم او حتى احذفو و ابدو من الصفر 
 - عشان تنزلو البكجات المطلوبة   
 `````
-pip install fastapi uvicorn sqlmodel
+pip install fastapi uvicorn pydantic sqlalchemy apscheduler
 ```````
 - عشان تعملو الداتا بيس اول مرة او ترجعو البيانات الاصلية
 ```
