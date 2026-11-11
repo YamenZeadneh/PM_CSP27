@@ -3,7 +3,7 @@ import sys
 from datetime import datetime, timedelta, date          # NEW: date is used by GET /slots
 from pathlib import Path
 from typing import Optional                              # NEW: optional query/body fields
-from fastapi import FastAPI, Depends, HTTPException, Header
+from fastapi import FastAPI, Depends, HTTPException, Header, Query   # NEW: Query is used by GET /audit
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func      # FIX: one import, "select" was imported twice
 from sqlalchemy.orm import Session
@@ -487,3 +487,99 @@ def stop_scheduler():
 @app.post("/admin/run-uncollected-job")
 def run_uncollected_job(user=Depends(require_role(Role.admin))):
     return {"marked_uncollected": mark_uncollected_orders()}
+
+
+# ======================================================================================
+# NEW (FR-12): ITEM WITHDRAWAL
+# The kitchen withdraws an item during the day. The item becomes unavailable and every order
+# that contains it and is still in state "placed" is cancelled and fully refunded.
+# Orders already "preparing" / "ready" are left alone (FR-12: "not yet being prepared").
+# Reuses _refund_order (which also restores stock and writes the ledger row), so the wallet
+# rule "balance == sum of ledger" keeps holding.
+# ======================================================================================
+@app.post("/menu/{item_id}/withdraw")
+def withdraw_menu_item(item_id: int, user=Depends(require_role(Role.kitchen)), db: Session = Depends(get_db)):
+    now = datetime.now()
+    refunded = []                                             # order ids cancelled by this withdrawal
+    with db.begin():                                          # item flag + all refunds commit together
+        item = db.scalar(select(MenuItem).where(MenuItem.id == item_id).with_for_update())
+        if not item:
+            raise HTTPException(404, "Item not found")
+        item.available = False                                # place_order rejects unavailable items
+
+        # Orders still in "placed" that contain this item. A subquery is used instead of
+        # JOIN + DISTINCT because PostgreSQL does not allow FOR UPDATE together with DISTINCT.
+        affected = db.scalars(
+            select(Order).where(
+                Order.state == OrderState.placed,
+                Order.id.in_(select(OrderLine.order_id).where(OrderLine.item_id == item_id)))
+            .order_by(Order.id).with_for_update()).all()      # id order = same lock order every time
+
+        for order in affected:
+            _refund_order(db, order, now)                     # refund + restore stock + state=cancelled
+            _audit(db, user.id, "ORDER_WITHDRAWN_REFUND", f"order:{order.id}")
+            refunded.append(order.id)
+        _audit(db, user.id, "ITEM_WITHDRAWN", f"menuitem:{item.id}")
+    return {"status": "withdrawn", "item_id": item_id, "cancelled_orders": refunded}
+
+
+# ======================================================================================
+# NEW (FR-11): DAILY REPORT (manager)
+# Definitions used (write them in the SRS so the figures are reproducible):
+#   - an order belongs to the day of its slot_start
+#   - revenue    = sum of totals of collected + uncollected orders (money the cafeteria keeps;
+#                  cancelled orders were refunded, placed/preparing/ready are not final yet)
+#   - top_items  = 3 items with the highest quantity in non-cancelled orders of the day
+# ======================================================================================
+@app.get("/reports/daily")
+def daily_report(day: Optional[date] = None, user=Depends(require_role(Role.manager)),
+                 db: Session = Depends(get_db)):
+    day = day or datetime.now().date()
+    start = datetime(day.year, day.month, day.day)
+    end = start + timedelta(days=1)
+
+    # Orders and money per state in one query
+    rows = db.execute(
+        select(Order.state, func.count(Order.id), func.coalesce(func.sum(Order.total), 0))
+        .where(Order.slot_start >= start, Order.slot_start < end)
+        .group_by(Order.state)).all()
+    by_state = {state.value: {"orders": n, "total": int(money)} for state, n, money in rows}
+
+    def count(name):                                          # helper: 0 when the state has no rows
+        return by_state.get(name, {}).get("orders", 0)
+
+    revenue = sum(by_state.get(n, {}).get("total", 0) for n in ("collected", "uncollected"))
+
+    # Top 3 items by quantity; name is the tie-breaker so the result is deterministic
+    top = db.execute(
+        select(MenuItem.name, func.sum(OrderLine.quantity).label("qty"))
+        .join(OrderLine, OrderLine.item_id == MenuItem.id)
+        .join(Order, Order.id == OrderLine.order_id)
+        .where(Order.slot_start >= start, Order.slot_start < end, Order.state != OrderState.cancelled)
+        .group_by(MenuItem.id, MenuItem.name)
+        .order_by(func.sum(OrderLine.quantity).desc(), MenuItem.name)
+        .limit(3)).all()
+
+    return {"day": day.isoformat(),
+            "orders": sum(v["orders"] for v in by_state.values()),
+            "collected": count("collected"),
+            "uncollected": count("uncollected"),
+            "cancelled": count("cancelled"),
+            "revenue": revenue,                               # fils
+            "by_state": by_state,
+            "top_items": [{"name": n, "quantity": int(q)} for n, q in top]}
+
+
+# ======================================================================================
+# NEW (FR-16): AUDIT LOG VIEW (admin)
+# Newest first. Optional filter ?action=ORDER_PLACED and ?limit=N (1-500).
+# ======================================================================================
+@app.get("/audit")
+def audit_log(limit: int = Query(100, ge=1, le=500), action: Optional[str] = None,
+              user=Depends(require_role(Role.admin)), db: Session = Depends(get_db)):
+    q = select(AuditEntry)
+    if action:
+        q = q.where(AuditEntry.action == action)
+    rows = db.scalars(q.order_by(AuditEntry.id.desc()).limit(limit)).all()
+    return [{"id": r.id, "actor_id": r.actor_id, "action": r.action, "target": r.target,
+             "timestamp": r.timestamp.isoformat()} for r in rows]
