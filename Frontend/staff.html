@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CafeQuick Staff</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<!-- data-page tells common.js which kind of account this page accepts -->
+<body data-page="staff">
+  <a class="skip" href="#content">Skip to content</a>
+
+  <header class="top">
+    <h1>CafeQuick Staff</h1>
+    <!-- Shown after sign-in: name and role, wallet balance (customers), sign-out -->
+    <span id="who" class="who" hidden>
+      <span id="roleInfo" class="chip"></span>
+      <button id="signOut" type="button" class="ghost light">Sign out</button>
+    </span>
+    <details class="dev">
+      <summary>Connection</summary>
+      <label>API base URL
+        <input id="apiUrl" type="text" value="http://127.0.0.1:8000">
+      </label>
+    </details>
+  </header>
+
+  <!-- ===== Sign-in (shown until the user signs in) ===== -->
+  <section id="auth" class="auth">
+      <!-- Simulated SSO: the e-mail is sent as the X-User-Email header (see current_user in main.py).
+           No password exists in this system (NFR-03); the real one uses university single sign-on. -->
+      <form id="inForm" class="card">
+        <h2>Staff sign-in</h2>
+        <label>University e-mail
+          <input id="email" type="text" list="seedUsers" autocomplete="username" required>
+          <datalist id="seedUsers"></datalist>
+        </label>
+        <button type="submit" class="wide">Sign in</button>
+      </form>
+    <p class="hint">Ordering food? <a href="index.html">Customer page</a></p>
+  </section>
+
+  <div id="app" hidden>
+    <nav id="tabs" role="tablist" aria-label="Screens"></nav>
+    <main id="content" tabindex="-1">
+    <!-- ===== Screen 3: kitchen (kitchen, FR-06, FR-12) ===== -->
+    <section id="tab-kitchen" class="panel" role="tabpanel" aria-labelledby="t-kitchen" hidden>
+      <div class="head"><h2>Orders by slot</h2><button id="refreshKitchen" type="button" class="ghost">Refresh</button></div>
+      <div id="queueBox"></div>
+      <h2>Withdraw an item</h2>
+      <div id="withdrawBox" class="chips"></div>
+    </section>
+
+    <!-- ===== Screen 4: cashier (cashier, FR-07, FR-13) ===== -->
+    <section id="tab-cashier" class="panel two" role="tabpanel" aria-labelledby="t-cashier" hidden>
+      <div class="card">
+        <h2>Hand over an order</h2>
+        <label>Order number
+          <input id="pickId" type="number" min="1" inputmode="numeric">
+        </label>
+        <label>4-digit pickup code
+          <input id="pickCode" type="text" maxlength="4" inputmode="numeric" pattern="\d{4}" autocomplete="off">
+        </label>
+        <button id="pickBtn" type="button" class="wide">Hand over order</button>
+      </div>
+      <div class="card">
+        <h2>Top up a wallet</h2>
+        <label>Customer e-mail
+          <input id="topEmail" type="text" list="seedUsers">
+        </label>
+        <label>Amount in fils (1 JD = 1000 fils)
+          <input id="topAmount" type="number" min="1" inputmode="numeric">
+        </label>
+        <button id="topBtn" type="button" class="wide">Top up wallet</button>
+      </div>
+    </section>
+
+    <!-- ===== Screen 5: manager (manager, FR-02, FR-11) ===== -->
+    <section id="tab-report" class="panel" role="tabpanel" aria-labelledby="t-report" hidden>
+      <div class="head">
+        <h2>Daily report</h2>
+        <label class="inline">Day <input id="reportDay" type="date"></label>
+        <button id="reportBtn" type="button">Show report</button>
+      </div>
+      <div id="reportBox"></div>
+      <div class="head"><h2>Today's stock</h2><button id="refreshStock" type="button" class="ghost">Refresh</button></div>
+      <div id="stockBox" class="stack"></div>
+    </section>
+
+    <!-- ===== Admin: audit log and uncollected job (admin, FR-16) ===== -->
+    <section id="tab-admin" class="panel" role="tabpanel" aria-labelledby="t-admin" hidden>
+      <div class="head">
+        <h2>Audit log</h2>
+        <label class="inline">Action <input id="auditAction" type="text" placeholder="e.g. ORDER_PLACED"></label>
+        <button id="auditBtn" type="button">Load</button>
+      </div>
+      <div class="scroll" id="auditBox"></div>
+      <h2>Uncollected-orders job</h2>
+      <button id="jobBtn" type="button" class="ghost">Run job now</button>
+    </section>
+
+    </main>
+  </div>
+
+  <div id="status" role="status" aria-live="polite"></div>
+  <details class="raw">
+    <summary>Last response (developer)</summary>
+    <pre id="output">Nothing sent yet.</pre>
+  </details>
+  <script src="common.js"></script>
+  <script src="staff.js"></script>
+</body>
+</html>

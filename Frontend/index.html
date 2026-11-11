@@ -3,40 +3,127 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>CafeQuick API Tester</title>
+  <title>CafeQuick</title>
   <link rel="stylesheet" href="style.css">
 </head>
-<body>
-  <main>
-    <h1>CafeQuick API Tester</h1>
+<!-- data-page tells common.js which kind of account this page accepts -->
+<body data-page="customer">
+  <a class="skip" href="#content">Skip to content</a>
 
-    <!-- Backend address (change if uvicorn runs elsewhere) -->
-    <label>API base URL
-      <input id="apiUrl" type="text" value="http://127.0.0.1:8000">
-    </label>
+  <header class="top">
+    <h1>CafeQuick</h1>
+    <!-- Shown after sign-in: name and role, wallet balance (customers), sign-out -->
+    <span id="who" class="who" hidden>
+      <span id="roleInfo" class="chip"></span>
+      <span id="balance" class="chip"></span>
+      <button id="signOut" type="button" class="ghost light">Sign out</button>
+    </span>
+    <details class="dev">
+      <summary>Connection</summary>
+      <label>API base URL
+        <input id="apiUrl" type="text" value="http://127.0.0.1:8000">
+      </label>
+    </details>
+  </header>
 
-    <!-- Simulated SSO: sent as the X-User-Email header (see current_user in main.py) -->
-    <label>User (X-User-Email)
-      <input id="email" type="text" value="student1@uni.edu" list="seedUsers">
-      <datalist id="seedUsers"></datalist>
-    </label>
+  <!-- ===== Sign-in and sign-up (shown until the user signs in) ===== -->
+  <section id="auth" class="auth">
 
-    <!-- Pickup slot: step=900 seconds gives 15-minute steps -->
-    <label>Pickup slot
-      <input id="slot" type="datetime-local" step="900">
-    </label>
+      <div class="seg" role="group" aria-label="Account">
+        <button id="showIn" type="button" class="ghost">I have an account</button>
+        <button id="showUp" type="button" class="ghost">Create an account</button>
+      </div>
+      <!-- Simulated SSO: the e-mail is sent as the X-User-Email header (see current_user in main.py).
+           No password exists in this system (NFR-03); the real one uses university single sign-on. -->
+      <form id="inForm" class="card">
+        <h2>Sign in</h2>
+        <label>University e-mail
+          <input id="email" type="text" list="seedUsers" autocomplete="username" required>
+          <datalist id="seedUsers"></datalist>
+        </label>
+        <button type="submit" class="wide">Sign in</button>
+      </form>
+      <!-- NEW: create a customer account and choose the opening wallet balance -->
+      <form id="upForm" class="card" hidden>
+        <h2>Create an account</h2>
+        <label>Full name
+          <input id="suName" type="text" maxlength="80" autocomplete="name" required>
+        </label>
+        <label>University e-mail
+          <input id="suEmail" type="text" autocomplete="email" required>
+        </label>
+        <label>Starting wallet balance (JD)
+          <input id="suBalance" type="number" min="0" max="100" step="0.5" value="10" inputmode="decimal">
+        </label>
+        <div class="chips amounts" role="group" aria-label="Quick amounts">
+          <button type="button" class="ghost small" data-amt="5">5 JD</button>
+          <button type="button" class="ghost small" data-amt="10">10 JD</button>
+          <button type="button" class="ghost small" data-amt="20">20 JD</button>
+          <button type="button" class="ghost small" data-amt="50">50 JD</button>
+        </div>
+        <p class="hint">Demo setting: in the real system a cashier loads the wallet. Maximum 100 JD.</p>
+        <button type="submit" class="wide">Create account</button>
+      </form>
+    <p class="hint">Chef or cashier? <a href="staff.html">Staff sign-in</a></p>
+  </section>
 
-    <!-- Order lines: 1 to 5 rows (matches max_length=5 in OrderIn) -->
-    <h2>Order lines</h2>
-    <div id="lines"></div>
-    <button id="addLine" type="button" class="secondary">+ Add line</button>
+  <div id="app" hidden>
+    <nav id="tabs" role="tablist" aria-label="Screens"></nav>
+    <main id="content" tabindex="-1">
+    <!-- ===== Screen 1: pickup time, menu, order (customer, FR-02, FR-03, FR-04, FR-14) ===== -->
+    <section id="tab-order" class="panel order" role="tabpanel" aria-labelledby="t-order" hidden>
+      <div class="main">
+        <h2>Pickup time</h2>
+        <p class="hint">The bar shows how full a slot is. Orders close 20 minutes before the slot starts.</p>
+        <div id="slotBox" class="slots"></div>
 
-    <button id="send" type="button">Place order (POST /orders)</button>
+        <div class="head">
+          <h2>Menu</h2>
+          <button id="refreshMenu" type="button" class="ghost">Refresh</button>
+        </div>
+        <div id="menuBox" class="menu"></div>
+      </div>
 
-    <h2>Response</h2>
-    <div id="status"></div>
+      <aside id="cart" class="card cart">
+        <h2>Your order</h2>
+        <!-- Pickup slot: step=900 seconds gives 15-minute steps. Filled by the slot buttons. -->
+        <label>Pickup time
+          <input id="slot" type="datetime-local" step="900">
+        </label>
+        <!-- Order lines: 1 to 5 rows (matches max_length=5 in OrderIn) -->
+        <div id="lines"></div>
+        <p id="empty" class="hint">Choose up to 5 items from the menu.</p>
+        <p id="short" class="warn" hidden>Your wallet balance is lower than this order. A cashier can top it up.</p>
+        <p class="total"><span>Total</span><strong id="total">0.000 JD</strong></p>
+        <button id="send" type="button" class="wide">Place order</button>
+      </aside>
+
+      <!-- Phone only: sticky summary that jumps to the order box -->
+      <a class="bar" href="#cart"><span id="barText">0 items</span><strong id="barTotal">0.000 JD</strong><span>Review order</span></a>
+    </section>
+
+    <!-- ===== Screen 2: my orders (customer, FR-05, FR-06) ===== -->
+    <section id="tab-mine" class="panel" role="tabpanel" aria-labelledby="t-mine" hidden>
+      <div class="head"><h2>My orders</h2><button id="refreshMine" type="button" class="ghost">Refresh</button></div>
+      <div id="mineBox" class="stack"></div>
+    </section>
+
+
+    <!-- ===== NEW Screen: wallet (customer) ===== -->
+    <section id="tab-wallet" class="panel" role="tabpanel" aria-labelledby="t-wallet" hidden>
+      <div class="head"><h2>Wallet</h2><button id="refreshWallet" type="button" class="ghost">Refresh</button></div>
+      <div id="walletBox"></div>
+    </section>
+
+    </main>
+  </div>
+
+  <div id="status" role="status" aria-live="polite"></div>
+  <details class="raw">
+    <summary>Last response (developer)</summary>
     <pre id="output">Nothing sent yet.</pre>
-  </main>
-  <script src="app.js"></script>
+  </details>
+  <script src="common.js"></script>
+  <script src="customer.js"></script>
 </body>
 </html>

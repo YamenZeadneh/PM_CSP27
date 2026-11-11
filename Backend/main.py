@@ -583,3 +583,6 @@ def audit_log(limit: int = Query(100, ge=1, le=500), action: Optional[str] = Non
     rows = db.scalars(q.order_by(AuditEntry.id.desc()).limit(limit)).all()
     return [{"id": r.id, "actor_id": r.actor_id, "action": r.action, "target": r.target,
              "timestamp": r.timestamp.isoformat()} for r in rows]
+
+from Backend.accounts import make_accounts_router
+app.include_router(make_accounts_router(get_db, current_user))
