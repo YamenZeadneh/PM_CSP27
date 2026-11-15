@@ -5,14 +5,17 @@ Based on the baseline domain model in the project brief (section 29.5.3).
 Run:  pip install sqlmodel
       python cafequick_db.py        -> creates cafequick_test.db and fills it with demo data
 In your backend:  from cafequick_db import engine, User, Wallet, ...
+Set DATABASE_URL to use PostgreSQL instead of SQLite.
 """
+import os                                                    # NEW: reads the DATABASE_URL environment variable
 import random
 from datetime import datetime, timedelta
 from enum import Enum
 from typing import List, Optional
 
 from pydantic import NaiveDatetime  # naive (no timezone) datetimes, newer SQLModel requires this annotation
-from sqlalchemy import CheckConstraint, UniqueConstraint
+# CHANGED: Index, event, text added; UniqueConstraint is no longer used (replaced by a partial unique index)
+from sqlalchemy import CheckConstraint, Index, event, text
 from sqlmodel import Field, Relationship, Session, SQLModel, create_engine, select
 
 # ---------------------------------------------------------------- enums
@@ -60,6 +63,11 @@ class Wallet(SQLModel, table=True):
     transactions: List["WalletTransaction"] = Relationship(back_populates="wallet")
 
 class WalletTransaction(SQLModel, table=True):
+    # NEW: ledger sign rule. payment is negative (0 for a free order), refund is >= 0, top-up is > 0.
+    # The database now refuses a ledger row with the wrong sign, not only the API code.
+    __table_args__ = (CheckConstraint(
+        "(kind = 'payment' AND amount <= 0) OR (kind = 'refund' AND amount >= 0) OR (kind = 'topup' AND amount > 0)",
+        name="ledger_sign"),)
     id: Optional[int] = Field(default=None, primary_key=True)
     wallet_id: int = Field(foreign_key="wallet.id", index=True)
     amount: int                                       # +fils for topup/refund, -fils for payment
@@ -80,12 +88,16 @@ class MenuItem(SQLModel, table=True):
     available: bool = True                            # False = withdrawn by kitchen (FR-12)
 
 class Order(SQLModel, table=True):
-    # One order per customer per slot (FR-03)
-    __table_args__ = (UniqueConstraint("customer_id", "slot_start", name="one_order_per_slot"),)
+    # CHANGED: was UniqueConstraint(customer_id, slot_start). Now a PARTIAL unique index: one order per
+    # customer per slot (FR-03), but cancelled orders no longer block the slot. This matches the API check
+    # (state != cancelled) and fixes the 500 error when a customer re-orders a slot after cancelling.
+    __table_args__ = (Index("one_order_per_slot", "customer_id", "slot_start", unique=True,
+                            sqlite_where=text("state != 'cancelled'"),
+                            postgresql_where=text("state != 'cancelled'")),)
     id: Optional[int] = Field(default=None, primary_key=True)
     customer_id: int = Field(foreign_key="user.id", index=True)
     slot_start: NaiveDatetime = Field(index=True)          # 15-min slot, max 20 orders (enforce in API)
-    state: OrderState = OrderState.placed
+    state: OrderState = Field(default=OrderState.placed, index=True)   # CHANGED: index=True (job and report filter by state)
     total: int = 0                                    # fils
     pickup_code: str = Field(default="0000", max_length=4)   # 4-digit code (FR-07)
     created_at: NaiveDatetime = Field(default_factory=datetime.now)
@@ -113,13 +125,25 @@ class Strike(SQLModel, table=True):
 
 class AuditEntry(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    actor_id: int = Field(foreign_key="user.id")
+    # CHANGED: nullable. None = action done by the system (scheduled job), not by a person.
+    actor_id: Optional[int] = Field(default=None, foreign_key="user.id")
     action: str                                       # e.g. "ORDER_PLACED", "ORDER_READY"
     target: str                                       # e.g. "order:3"
     timestamp: NaiveDatetime = Field(default_factory=datetime.now)
 
 # ---------------------------------------------------------------- engine
-engine = create_engine("sqlite:///cafequick_test.db", echo=False)
+# CHANGED: the URL comes from DATABASE_URL, so the pilot can use PostgreSQL with no code change,
+# e.g. postgresql+psycopg://user:pass@localhost/cafequick  (pip install "psycopg[binary]").
+# The default stays SQLite for development.
+DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///cafequick_test.db")
+engine = create_engine(DATABASE_URL, echo=False)
+
+# NEW: SQLite ignores foreign keys unless this is switched on for every connection.
+# PostgreSQL always enforces them, so this makes development behave like the pilot.
+if engine.dialect.name == "sqlite":
+    @event.listens_for(engine, "connect")
+    def _sqlite_fk_on(dbapi_conn, _):
+        dbapi_conn.execute("PRAGMA foreign_keys=ON")
 
 def init_db() -> None:
     """Drop and recreate all tables (test DB only!)."""
@@ -152,7 +176,7 @@ def _refund(session: Session, wallet: Wallet, order: Order, when: datetime) -> N
                                   kind=TxKind.refund, reference=f"order:{order.id}", time=when))
     wallet.balance += order.total
 
-def seed(n_customers: int = 20) -> None:
+def seed(n_customers: int = 20, n_items: int = 10) -> None:    # CHANGED: n_items added, default keeps the old data
     random.seed(42)                                   # deterministic data = repeatable tests
     init_db()
     now = datetime.now().replace(second=0, microsecond=0)
@@ -180,7 +204,10 @@ def seed(n_customers: int = 20) -> None:
             s.add(Wallet(user_id=st.id, balance=0))
 
         # --- menu
-        items = [MenuItem(name=n, price=p, stock=st, tags=t) for n, p, st, t in MENU]
+        # CHANGED: the first 10 items are the fixed MENU; extra items (for the load test) are generated.
+        extra = [(f"Item {k}", random.choice([500, 800, 1000, 1500, 2500]), 100, "")
+                 for k in range(len(MENU) + 1, n_items + 1)]
+        items = [MenuItem(name=n, price=p, stock=st, tags=t) for n, p, st, t in MENU + extra]
         items[6].available = False                    # withdrawn item for FR-12 tests (Mansaf)
         s.add_all(items); s.commit()
 
@@ -201,7 +228,7 @@ def seed(n_customers: int = 20) -> None:
         for state, off, ci in plan:
             cust = customers[ci]
             slot = (now + timedelta(minutes=off)).replace(minute=((now + timedelta(minutes=off)).minute // 15) * 15)
-            # uncollected orders on the same day for the same customer need distinct slots (unique constraint)
+            # uncollected orders on the same day for the same customer need distinct slots (unique index)
             order = Order(customer_id=cust.id, slot_start=slot, state=state,
                           pickup_code=f"{random.randint(0, 9999):04d}", created_at=slot - timedelta(hours=2))
             s.add(order); s.commit(); s.refresh(order)

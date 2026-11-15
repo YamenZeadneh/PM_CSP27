@@ -43,7 +43,7 @@
         </label>
         <button type="submit" class="wide">Sign in</button>
       </form>
-      <!-- NEW: create a customer account and choose the opening wallet balance -->
+      <!-- create a customer account and choose the opening wallet balance -->
       <form id="upForm" class="card" hidden>
         <h2>Create an account</h2>
         <label>Full name
@@ -68,6 +68,8 @@
   </section>
 
   <div id="app" hidden>
+    <!-- NEW: strike count and block notice (FR-09), filled by renderHeader() in common.js -->
+    <p id="blockNote" class="warn" style="margin:10px 16px" hidden></p>
     <nav id="tabs" role="tablist" aria-label="Screens"></nav>
     <main id="content" tabindex="-1">
     <!-- ===== Screen 1: pickup time, menu, order (customer, FR-02, FR-03, FR-04, FR-14) ===== -->
@@ -109,7 +111,7 @@
     </section>
 
 
-    <!-- ===== NEW Screen: wallet (customer) ===== -->
+    <!-- ===== Screen: wallet (customer) ===== -->
     <section id="tab-wallet" class="panel" role="tabpanel" aria-labelledby="t-wallet" hidden>
       <div class="head"><h2>Wallet</h2><button id="refreshWallet" type="button" class="ghost">Refresh</button></div>
       <div id="walletBox"></div>

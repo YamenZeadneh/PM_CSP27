@@ -85,6 +85,15 @@
       <div id="reportBox"></div>
       <div class="head"><h2>Today's stock</h2><button id="refreshStock" type="button" class="ghost">Refresh</button></div>
       <div id="stockBox" class="stack"></div>
+      <!-- NEW: create a menu item (POST /menu) -->
+      <h2>Add a menu item</h2>
+      <div class="card">
+        <label>Name <input id="newName" type="text" maxlength="60"></label>
+        <label>Price in fils (1 JD = 1000 fils) <input id="newPrice" type="number" min="0" inputmode="numeric"></label>
+        <label>Today's stock <input id="newStock" type="number" min="0" inputmode="numeric"></label>
+        <label>Tags (comma separated) <input id="newTags" type="text" placeholder="vegan,halal"></label>
+        <button id="newBtn" type="button" class="wide">Add item</button>
+      </div>
     </section>
 
     <!-- ===== Admin: audit log and uncollected job (admin, FR-16) ===== -->

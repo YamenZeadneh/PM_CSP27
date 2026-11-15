@@ -2,19 +2,21 @@
 CafeQuick account management (FR-01, FR-04, NFR-03, NFR-05).
 Adds three endpoints without touching the rest of main.py:
     POST /signup          create a customer account and choose the opening wallet balance
-    GET  /me              who am I: name, role, wallet balance (used by the pages after sign-in)
+    GET  /me              who am I: name, role, wallet balance, block status, strikes (used by the pages after sign-in)
     GET  /wallet/history  wallet balance + last 30 ledger rows
 Hook-up (two lines at the END of Backend/main.py):
     from Backend.accounts import make_accounts_router
     app.include_router(make_accounts_router(get_db, current_user))
 """
+from datetime import datetime, timedelta                     # NEW: for the 30-day strike window
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import select, func                          # CHANGED: func added
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from cafequick_db import AuditEntry, Role, TxKind, User, Wallet, WalletTransaction
+from cafequick_db import AuditEntry, Role, Strike, TxKind, User, Wallet, WalletTransaction   # CHANGED: Strike added
 
 # ---- demo switches -------------------------------------------------------------------
 # The brief (FR-13) says only a cashier puts money in a wallet. Letting a customer choose
@@ -67,9 +69,13 @@ def make_accounts_router(get_db, current_user) -> APIRouter:
     @router.get("/me")
     def me(user=Depends(current_user), db: Session = Depends(get_db)):
         wallet = db.scalar(select(Wallet).where(Wallet.user_id == user.id))
+        # NEW: strikes in the last 30 days (FR-09 counts the same window), shown in the customer UI
+        strikes = db.scalar(select(func.count(Strike.id)).where(
+            Strike.user_id == user.id, Strike.time >= datetime.now() - timedelta(days=30)))
         return {"id": user.id, "name": user.name, "email": user.email, "role": user.role.value,
                 "balance": wallet.balance if wallet else 0,
-                "blocked_until": user.blocked_until.isoformat() if user.blocked_until else None}
+                "blocked_until": user.blocked_until.isoformat() if user.blocked_until else None,
+                "strikes_30d": strikes or 0}          # NEW key
 
     @router.get("/wallet/history")
     def wallet_history(user=Depends(current_user), db: Session = Depends(get_db)):

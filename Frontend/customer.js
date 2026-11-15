@@ -44,8 +44,8 @@ async function loadMenu() {
 $("refreshMenu").onclick = () => { loadMenu(); loadSlots(); };
 
 // ---- order lines ----
-// Same function name and arguments as before. CHANGED: adding an item that is already in
-// the cart raises its quantity (max 5 per line, DB CHECK qty_1_to_5) instead of a new row.
+// Adding an item that is already in the cart raises its quantity (max 5 per line,
+// DB CHECK qty_1_to_5) instead of a new row.
 function addLine(itemId = "", qty = 1) {
   const same = [...linesDiv.children].find((r) => r.querySelector(".item").value === String(itemId));
   if (itemId !== "" && same) {
@@ -76,7 +76,7 @@ function addLine(itemId = "", qty = 1) {
   renderCart();
 }
 
-// NEW: recompute total, enable/disable the order button, update the badges on the menu cards
+// recompute total, enable/disable the order button, update the badges on the menu cards
 function renderCart() {
   let total = 0, count = 0;
   const inCart = {};
@@ -92,9 +92,9 @@ function renderCart() {
   $("barTotal").textContent = jd(total);
   $("barText").textContent = count + (count === 1 ? " item" : " items");
   $("empty").hidden = !none;
-  const short = !!me && total > me.balance;   // NEW: the wallet cannot cover this order
+  const short = !!me && total > me.balance;   // the wallet cannot cover this order
   $("short").hidden = !short;
-  $("send").disabled = none || short;
+  $("send").disabled = none || short || isBlocked();   // CHANGED: a blocked customer cannot press Place order (FR-09)
   document.querySelectorAll("[data-count]").forEach((s) => {
     s.textContent = inCart[s.dataset.count] ? "(" + inCart[s.dataset.count] + ")" : "";
   });
@@ -142,7 +142,11 @@ async function loadMine() {
       ${idx >= 0 ? `<ol class="progress">${STEPS.map((s, i) =>
         `<li class="${i <= idx ? "on" : ""}" ${i === idx ? 'aria-current="step"' : ""}>${s}</li>`).join("")}</ol>` : ""}
       ${o.pickup_code ? `<p class="code-l">Pickup code</p><p class="code">${esc(o.pickup_code)}</p>` : ""}
-      ${o.state === "placed" ? actBtn("cancel", o.order_id, "Cancel order", "danger") : ""}
+      ${o.state === "placed"
+        ? (new Date(o.slot_start) - Date.now() >= 15 * 60 * 1000          // CHANGED: same 15-minute rule as the server
+            ? actBtn("cancel", o.order_id, "Cancel order", "danger")
+            : '<p class="hint">Cancellation closed (15 minutes before the slot).</p>')
+        : ""}
     </article>`;
   }).join("") || empty("You have no orders yet.");
 }
@@ -150,7 +154,7 @@ $("refreshMine").onclick = loadMine;
 
 
 // ======================================================================================
-// NEW: wallet screen (balance + last 30 ledger rows from GET /wallet/history)
+// wallet screen (balance + last 30 ledger rows from GET /wallet/history)
 // ======================================================================================
 async function loadWallet() {
   const r = await api("GET", "/wallet/history");
@@ -166,7 +170,7 @@ async function loadWallet() {
 $("refreshWallet").onclick = loadWallet;
 
 // ======================================================================================
-// NEW: create an account. The customer chooses the opening wallet balance in JD;
+// create an account. The customer chooses the opening wallet balance in JD;
 // the page converts it to fils (integer money, constraint in 29.3.5).
 // ======================================================================================
 $("showIn").onclick = () => { $("inForm").hidden = false; $("upForm").hidden = true; };

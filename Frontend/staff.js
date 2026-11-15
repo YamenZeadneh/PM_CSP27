@@ -39,7 +39,7 @@ $("topBtn").onclick = () => api("POST", "/wallet/topup",
   { ok: (d) => "Wallet topped up. New balance: " + jd(d.balance) });
 
 // ======================================================================================
-// Screen 5: manager (FR-11 report, FR-02 stock)
+// Screen 5: manager (FR-11 report, FR-02 menu and stock)
 // ======================================================================================
 $("reportDay").value = new Date().toISOString().slice(0, 10);
 async function loadReport() {
@@ -58,14 +58,31 @@ $("reportBtn").onclick = loadReport;
 async function loadStock() {
   const r = await api("GET", "/menu");
   if (!r.ok) return;
+  // CHANGED: each card now edits name, price, tags and stock; withdrawn items get a Re-enable button
   $("stockBox").innerHTML = r.data.map((i) => `
-    <div class="card row">
-      <label class="inline grow">${esc(i.name)}
-        <input id="stock-${i.id}" class="stockIn" type="number" min="0" value="${i.stock}"></label>
-      ${actBtn("set-stock", i.id, "Save")}
+    <div class="card">
+      <div class="row"><strong>${esc(i.name)}</strong>
+        ${i.available ? "" : '<span class="tag">withdrawn</span>' + actBtn("enable-item", i.id, "Re-enable item")}</div>
+      <label>Name <input id="name-${i.id}" type="text" value="${esc(i.name)}"></label>
+      <label>Price in fils <input id="price-${i.id}" type="number" min="0" value="${i.price}"></label>
+      <label>Tags <input id="tags-${i.id}" type="text" value="${esc(i.tags)}"></label>
+      ${actBtn("save-item", i.id, "Save details")}
+      <div class="row">
+        <label class="inline grow">Stock
+          <input id="stock-${i.id}" class="stockIn" type="number" min="0" value="${i.stock}"></label>
+        ${actBtn("set-stock", i.id, "Save stock")}
+      </div>
     </div>`).join("");
 }
 $("refreshStock").onclick = loadStock;
+
+// NEW: create a menu item (POST /menu, manager only)
+$("newBtn").onclick = async () => {
+  const r = await api("POST", "/menu", {
+    name: $("newName").value, price: Number($("newPrice").value),
+    stock: Number($("newStock").value), tags: $("newTags").value }, { ok: "Item added." });
+  if (r.ok) { ["newName", "newPrice", "newStock", "newTags"].forEach((x) => ($(x).value = "")); loadStock(); }
+};
 
 // ======================================================================================
 // Admin (FR-16 audit log, objective 3 manual job trigger)
@@ -76,7 +93,8 @@ $("auditBtn").onclick = async () => {
   if (!r.ok) return;
   $("auditBox").innerHTML = r.data.length
     ? `<table><thead><tr><th scope="col">Time</th><th scope="col">Actor</th><th scope="col">Action</th><th scope="col">Target</th></tr></thead><tbody>` +
-      r.data.map((e) => `<tr><td>${esc(e.timestamp.replace("T", " ").slice(0, 19))}</td><td>${e.actor_id}</td><td>${esc(e.action)}</td><td>${esc(e.target)}</td></tr>`).join("") +
+      // CHANGED: actor_id null = the system (scheduled job)
+      r.data.map((e) => `<tr><td>${esc(e.timestamp.replace("T", " ").slice(0, 19))}</td><td>${e.actor_id ?? "system"}</td><td>${esc(e.action)}</td><td>${esc(e.target)}</td></tr>`).join("") +
       `</tbody></table>`
     : empty("No entries.");
 };

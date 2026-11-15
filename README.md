@@ -1,28 +1,170 @@
 # PM_CSP27
-CafeQuick: Cafeteria Pre-Order &amp; Pickup System
-- اضفة كودات اولية عشان تكون نقطة بداية ولا اشي هون رسمي عدلو زي ما بدكم او حتى احذفو و ابدو من الصفر 
-- عشان تنزلو البكجات المطلوبة   
-`````
-pip install fastapi uvicorn pydantic sqlalchemy apscheduler
-```````
-- عشان تعملو الداتا بيس اول مرة او ترجعو البيانات الاصلية
+CafeQuick: Cafeteria Pre-Order & Pickup System
+
+## تشغيل المشروع
+
+> الكودات هون نقطة بداية مش اشي رسمي. عدلو عليها زي ما بدكم او حتى احذفو وابدو من الصفر.
+
+### 1. تنزيل الباكجات المطلوبة
+
+بايثون 3.10 او اعلى. شغلو الامر من المجلد الرئيسي للمشروع:
+
+```
+pip install fastapi uvicorn pydantic sqlalchemy sqlmodel apscheduler pytest pytest-cov httpx
+```
+
+- `sqlmodel` ضروري لملف الداتا بيس، و `pytest` و `pytest-cov` و `httpx` للتستات.
+
+### 2. الداتا بيس (اول مرة او لما بدكم ترجعو البيانات الاصلية)
+
 ```
 python Database/cafequick_db.py
 ```
-- عشان تشغلو الباك ايند
+
+- بينشئ ملف `cafequick_test.db` وبيعبيه بيانات تجريبية (20 زبون، 4 موظفين، 10 اصناف، طلبات بكل الحالات).
+- انتبهو: بيمسح كل البيانات القديمة قبل ما يعبي من جديد.
+- ملف `cafequick_test.db` مش لازم ينرفع على GitHub. ضيفوه على `.gitignore`.
+
+### 3. تشغيل الباك ايند
+
 ```
 uvicorn Backend.main:app --reload
 ```
-- بعدها افتحو تيرمينل جيديد للفرنت ايند
+
+- شغلوه من المجلد الرئيسي (مش من جوا مجلد Backend).
+- التوثيق التلقائي للـ API بيطلع على: http://127.0.0.1:8000/docs
+- لازم يكون بآخر `Backend/main.py` هالسطرين (هني اللي بيفعلو التسجيل وصفحة المحفظة):
+
+```python
+from Backend.accounts import make_accounts_router
+app.include_router(make_accounts_router(get_db, current_user))
+```
+
+### 4. تشغيل الفرونت ايند
+
+افتحو تيرمينل جديد:
+
 ```
 cd Frontend
 python3 -m http.server 5500
 ```
+
+- صفحة الزبون: http://localhost:5500
+- صفحة الموظفين (شيف، كاشير، مدير، ادمن): http://localhost:5500/staff.html
+- استخدمو `localhost` او `127.0.0.1` مش `0.0.0.0`. الباك ايند بيسمح (CORS) بس لهدول العنوانين، و `0.0.0.0` اصلا ما بيفتح بالمتصفح.
+- على ويندوز لو طلع `Python was not found` شغلو الامر من WSL او استخدمو `python` بدل `python3`.
+- لو غيرتو ملفات الفرونت وما ظهر التغيير، اعملو Ctrl+F5.
+
+### 5. تشغيل التستات
+
+```
+pytest Tests --cov=Backend --cov-report=term-missing
+```
+
+- شغلوها من المجلد الرئيسي. كل تست بيستخدم داتا بيس مؤقتة، فما بتمس `cafequick_test.db`.
+- المطلوب بالـ brief (NFR-08): تغطية 70% على الاقل.
+
+### 6. هيكلية المشروع
+
+```
+PM_CSP27/
+  Backend/
+    main.py            الـ API الرئيسي: الطلبات، المطبخ، المحفظة، التقارير، job الطلبات غير المستلمة
+    accounts.py        التسجيل (signup) و /me و سجل المحفظة
+  Database/
+    cafequick_db.py    الجداول + البيانات التجريبية
+  Frontend/
+    index.html         صفحة الزبون (تسجيل دخول، انشاء حساب، طلب، طلباتي، المحفظة)
+    staff.html         صفحة الموظفين (مطبخ، كاشير، تقرير، ادمن)
+    common.js          الكود المشترك: الطلبات للـ API، تسجيل الدخول، التابات
+    customer.js        شاشات الزبون
+    staff.js           شاشات الموظفين
+    style.css
+  Tests/
+    conftest.py        اعدادات التستات (داتا بيس مؤقتة + ساعة ثابتة)
+    test_backend.py
+    test_accounts.py
+```
+
+- تنظيف: اذا لسا موجودين، احذفو `Frontend/app.js` و `Frontend/accounts.py` و `Frontend/test_accounts.py`. هدول نسخ قديمة او مكررة من ملفات موجودة بمكانها الصحيح.
+
+---
+
+## Accounts and roles
+
+Sign-in is a simulated single sign-on (NFR-03): the page sends the e-mail in the `X-User-Email` header and the backend looks it up. No password exists anywhere. The real system would use the university OpenID Connect provider (Keycloak is the planned test provider).
+
+Each page accepts only its own kind of account. A staff account on `index.html`, or a customer account on `staff.html`, is refused with a message.
+
+### Accounts created by the seed script
+
+| E-mail | Role | Page | Notes |
+|---|---|---|---|
+| `student1@uni.edu` to `student20@uni.edu` | customer | `index.html` | Wallets start with 50, 75 or 100 JD. |
+| `student20@uni.edu` | customer | `index.html` | Wallet is 0 JD, used for "insufficient balance" tests. |
+| `student10@uni.edu` | customer | `index.html` | Blocked for 7 days (three strikes), used for FR-09 tests. |
+| `kitchen@uni.edu` | kitchen | `staff.html` | Queue by slot, preparing, ready, withdraw an item. |
+| `cashier@uni.edu` | cashier | `staff.html` | Hand over by pickup code, wallet top-up. |
+| `manager@uni.edu` | manager | `staff.html` | Daily report, menu stock. |
+| `admin@uni.edu` | admin | `staff.html` | Audit log, run the uncollected-orders job by hand. |
+
+Staff accounts exist only in the seed data. There is no screen that creates them.
+
+### Creating a customer account
+
+On `index.html`, choose "Create an account", enter a name, any e-mail text (a fake one is fine, it is only an identifier) and the starting wallet balance in JD (maximum 100 JD). The backend creates the user, the wallet, one ledger row for the opening balance and an audit entry, then the page signs the new customer in.
+
+Warning: letting a customer pick their own balance is a demo feature and contradicts FR-13, where only a cashier loads wallets. It is controlled by `ALLOW_SELF_FUNDING` in `Backend/accounts.py`. Set it to `False` and sign-up accepts only a 0 JD opening balance.
+
+### Money
+
+All amounts are integer fils (1 JD = 1000 fils). Every wallet change is also written as a ledger row, so the balance always equals the sum of its transactions.
+
+## REST API outline
+
+All endpoints except `/signup` need the `X-User-Email` header. Interactive documentation: `http://127.0.0.1:8000/docs`.
+
+| Method and path | Role | Requirement | What it does |
+|---|---|---|---|
+| `POST /signup` | public | FR-01, FR-04 | Create a customer account with an opening balance. |
+| `GET /me` | any | FR-01 | Name, role, wallet balance, block status. |
+| `GET /wallet/history` | any | FR-04 | Balance and the last 30 ledger rows. |
+| `GET /menu` | any | FR-02, FR-14 | Customers see available items in stock. Kitchen, manager and admin see all. |
+| `POST /menu` | manager | FR-02 | Create an item. |
+| `PUT /menu/{id}` | manager | FR-02 | Edit name, price or tags. |
+| `PUT /menu/{id}/stock` | manager | FR-02 | Set today's stock. |
+| `POST /menu/{id}/withdraw` | kitchen | FR-12 | Withdraw an item, refund orders not yet being prepared. |
+| `GET /slots` | any | FR-03 | The 28 pickup slots with taken and remaining places. |
+| `POST /orders` | customer | FR-03, FR-04, FR-10 | Place an order: slot, stock and wallet checks in one transaction. |
+| `GET /orders/mine` | customer | FR-05, FR-06 | Own orders; the pickup code appears only when the order is ready. |
+| `POST /orders/{id}/cancel` | customer | FR-05 | Cancel until 15 minutes before the slot; refund and restore stock. |
+| `GET /kitchen/queue` | kitchen | FR-06 | Open orders of today by slot. |
+| `POST /orders/{id}/preparing` | kitchen | FR-06 | placed to preparing. |
+| `POST /orders/{id}/ready` | kitchen | FR-06 | preparing to ready, customer notified (currently a log stub). |
+| `POST /orders/{id}/pickup` | cashier | FR-07 | Hand over against the 4-digit code. |
+| `POST /wallet/topup` | cashier | FR-13 | Add money to a customer wallet. |
+| `GET /reports/daily` | manager | FR-11 | Orders, collected, uncollected, cancelled, revenue, top 3 items. |
+| `GET /audit` | admin | FR-16 | Audit log, newest first, optional `action` filter. |
+| `POST /admin/run-uncollected-job` | admin | FR-08, FR-09 | Run the uncollected-orders job now. |
+
+The uncollected-orders job also runs by itself every minute between 07:00 and 15:59.
+
+## Known limitations
+
+- `X-User-Email` can be forged by anyone, so this sign-in fails NFR-03 outside development. Real OpenID Connect is not implemented.
+- The ready notice (FR-06) only prints to the server log. No e-mail or push is sent.
+- The database is SQLite. Row locks (`with_for_update`) are ignored there, so the concurrency test is only a smoke test. The real proof needs PostgreSQL and the advisory lock noted in `place_order`.
+- Run uvicorn with one worker, otherwise every worker starts its own uncollected-orders job.
+- Not done yet: hourly backups (NFR-09), load test (NFR-01), OWASP Top 10 check (NFR-04), one-command deployment (NFR-10), loyalty points (FR-15, Could).
+
+---
+
 # CafeQuick diagrams (PMP section 5 and 6)
 
 Mermaid source. GitHub renders these blocks directly. To get images for the PDF, paste a block into
 https://mermaid.live and export PNG/SVG (check it is readable when printed, as the brief requires).
 Status: written from the brief and the current code; not yet reviewed by the team.
+Diagrams 12 and 13 were added with the account pages; diagram 2 was updated for the two front-end pages.
 
 ## 1. C4 level 1: system context
 
@@ -51,8 +193,8 @@ flowchart LR
 flowchart LR
     user["Browser<br/>customers and staff"]
     subgraph cafequick["CafeQuick"]
-        fe["Front end<br/>HTML, JavaScript or React<br/>static files over HTTPS"]
-        api["Back-end API<br/>Python FastAPI modular monolith<br/>owns slot, stock, wallet, cancel, pickup rules"]
+        fe["Front end<br/>HTML and JavaScript, two pages<br/>index.html customers, staff.html staff<br/>static files over HTTPS"]
+        api["Back-end API<br/>Python FastAPI modular monolith<br/>main.py rules + accounts.py sign-up and /me<br/>owns slot, stock, wallet, cancel, pickup rules"]
         job["Uncollected-order job<br/>APScheduler inside the API process<br/>runs every minute 07:00-15:59"]
         db[("Relational database<br/>PostgreSQL for the pilot<br/>SQLite for dev and tests")]
     end
@@ -312,6 +454,8 @@ flowchart LR
 
 ## 11. Low-fidelity wireframes (five main screens)
 
+These are the planned layouts from the brief. The built pages also have a sign-in and create-account screen (wireframe 6) and a customer wallet screen.
+
 Screen 1: Customer, menu and order
 
 ```
@@ -394,4 +538,63 @@ Screen 5: Manager, daily report
 +------------------------------------------+
 | Menu and stock [ edit ]                  |
 +------------------------------------------+
+```
+
+Screen 6: Customer, create account (added with the account pages)
+
+```
++------------------------------------------+
+| [ I have an account ] [ Create account ] |
++------------------------------------------+
+| Create an account                        |
+| Full name        [____________________]  |
+| University e-mail [___________________]  |
+| Starting wallet balance (JD) [ 10 ]      |
+|   [ 5 JD ] [ 10 JD ] [ 20 JD ] [ 50 JD ] |
+| Demo setting. Maximum 100 JD.            |
+|            [ Create account ]            |
++------------------------------------------+
+| Chef or cashier? Staff sign-in           |
++------------------------------------------+
+```
+
+## 12. Sequence: create account and sign in (accounts.py)
+
+```mermaid
+sequenceDiagram
+    actor U as User
+    participant FE as Front end
+    participant API as Back-end API
+    participant DB as Database
+    U->>FE: choose Create an account, enter name, e-mail, starting balance
+    FE->>API: POST /signup (name, email, initial_balance in fils)
+    API->>API: e-mail not empty, balance 0 to 100000 fils, self-funding switch on
+    API->>DB: BEGIN
+    alt e-mail already has an account
+        API->>DB: ROLLBACK
+        API-->>FE: 409 This e-mail already has an account
+    else new e-mail
+        API->>DB: insert User with role customer, Wallet, opening top-up ledger row, audit row
+        API->>DB: COMMIT
+        API-->>FE: 201 created
+        FE->>API: GET /me (X-User-Email)
+        API->>DB: read user and wallet
+        API-->>FE: name, role, balance
+        FE-->>U: customer screens open, balance shown in the header
+    end
+```
+
+## 13. Flow: which page and screens each role gets
+
+```mermaid
+flowchart LR
+    ci["index.html<br/>customer page"] --> me["GET /me<br/>returns the role"]
+    si["staff.html<br/>staff page"] --> me
+    me -->|customer| cs["Order, My orders, Wallet"]
+    me -->|kitchen| ks["Kitchen queue, withdraw an item"]
+    me -->|cashier| cas["Hand over, wallet top-up"]
+    me -->|manager| ms["Daily report, stock"]
+    me -->|admin| ad["Audit log, run the job"]
+    ci -.->|"staff account is refused"| me
+    si -.->|"customer account is refused"| me
 ```

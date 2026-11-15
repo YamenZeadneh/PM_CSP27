@@ -12,7 +12,7 @@ const statusDiv = document.getElementById("status");
 const output = document.getElementById("output");
 
 const MAX_LINES = 5; // same limit as OrderIn.lines in main.py
-const PAGE = document.body.dataset.page; // NEW: "customer" or "staff" (set on <body> of each page)
+const PAGE = document.body.dataset.page; // "customer" or "staff" (set on <body> of each page)
 
 // E-mail suggestions for the sign-in box (users created by the seed script)
 const datalist = document.getElementById("seedUsers");
@@ -35,11 +35,11 @@ function esc(s) {
 // Money is stored in fils; show JD with 3 decimals (1 JD = 1000 fils)
 const jd = (fils) => (fils / 1000).toFixed(3) + " JD";
 
-let menuCache = {};   // NEW: item id -> item, so the cart can show names and compute the total
-let activeTab = "";   // NEW: which tab is open (used by the auto-refresh timer)
+let menuCache = {};   // item id -> item, so the cart can show names and compute the total
+let activeTab = "";   // which tab is open (used by the auto-refresh timer)
 let toastTimer;
 
-// NEW: toast = short message in the corner; errors are explained in plain words
+// toast = short message in the corner; errors are explained in plain words
 function toast(msg, ok) {
   statusDiv.textContent = msg;
   statusDiv.className = "show " + (ok ? "ok" : "err");
@@ -84,15 +84,26 @@ const empty = (text) => `<p class="hint">${esc(text)}</p>`;
 
 
 // ======================================================================================
-// NEW: accounts. Sign-in is still the simulated SSO (X-User-Email header; no passwords are
-// stored, NFR-03), but the page now asks the backend who you are (GET /me), so the role and
+// Accounts. Sign-in is still the simulated SSO (X-User-Email header; no passwords are
+// stored, NFR-03), but the page asks the backend who you are (GET /me), so the role and
 // the wallet balance come from the database instead of being guessed from the e-mail.
 // ======================================================================================
-let me = null; // { id, name, email, role, balance } after sign-in
+let me = null; // { id, name, email, role, balance, blocked_until, strikes_30d } after sign-in
+
+// NEW: true while the 3-strikes block (FR-09) is running
+const isBlocked = () => !!me && !!me.blocked_until && new Date(me.blocked_until) > new Date();
 
 function renderHeader() {
   $("roleInfo").textContent = me.name + " (" + me.role + ")";
   if ($("balance")) $("balance").textContent = "Wallet " + jd(me.balance);
+  // NEW: strike / block banner (exists only on the customer page)
+  if ($("blockNote")) {
+    const n = me.strikes_30d || 0;
+    $("blockNote").hidden = !(isBlocked() || n > 0);
+    $("blockNote").textContent = (isBlocked()
+      ? "Ordering is blocked until " + me.blocked_until.replace("T", " ").slice(0, 16) + ". "
+      : "") + "Strikes in the last 30 days: " + n + " of 3.";
+  }
 }
 // Re-read the balance (after ordering, cancelling...) and redraw what depends on it
 async function refreshMe() {
@@ -193,6 +204,13 @@ document.addEventListener("click", async (e) => {
       break;
     case "set-stock":
       if ((await api("PUT", `/menu/${id}/stock`, { stock: Number($("stock-" + id).value) }, { ok: "Stock saved." })).ok) loadStock();
+      break;
+    case "save-item":     // NEW: edit name, price, tags (PUT /menu/{id})
+      if ((await api("PUT", `/menu/${id}`, { name: $("name-" + id).value, price: Number($("price-" + id).value),
+          tags: $("tags-" + id).value }, { ok: "Item saved." })).ok) loadStock();
+      break;
+    case "enable-item":   // NEW: bring a withdrawn item back (PUT /menu/{id} with available: true)
+      if ((await api("PUT", `/menu/${id}`, { available: true }, { ok: "Item is available again." })).ok) loadStock();
       break;
   }
 });

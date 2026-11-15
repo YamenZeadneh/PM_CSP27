@@ -4,14 +4,17 @@ Run from the repo root:   pytest Tests --cov=Backend --cov-report=term-missing
 Fixtures and helpers live in conftest.py.
 """
 import threading
-from datetime import timedelta
+from datetime import datetime, timedelta                 # CHANGED: datetime added (used by test_me_returns_strikes_30d)
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import IntegrityError                # NEW: used by test_ledger_sign_check_rejects_wrong_sign
 from sqlmodel import Session
 
 from Backend import main
-from cafequick_db import (MenuItem, Order, OrderState, Role, Strike, User, Wallet, WalletTransaction)
+# CHANGED: AuditEntry and TxKind added for the new tests at the end of the file
+from cafequick_db import (AuditEntry, MenuItem, Order, OrderState, Role, Strike, TxKind, User, Wallet,
+                          WalletTransaction)
 from conftest import (CLOCK, H, START, add_order, balance_and_ledger, get_row, make_item,
                       make_user, order_body, slot)
 
@@ -241,7 +244,8 @@ def test_uncollected_orders_get_strike_no_refund_and_three_strikes_block(engine)
         add_order(engine, uid, START - timedelta(minutes=40 + 15 * n), OrderState.ready, [(item, 1, 1000)])
     # inside the grace period (slot_start = now - 30 min) -> must NOT be marked yet
     add_order(engine, uid, START - timedelta(minutes=30), OrderState.ready, [(item, 1, 1000)])
-    # not ready (still preparing) -> never uncollected
+    # CHANGED: still preparing 120 min after its slot started = stuck order. It is never uncollected;
+    # the new stuck-order rule cancels and refunds it (no strike).
     add_order(engine, uid, START - timedelta(minutes=120), OrderState.preparing, [(item, 1, 1000)])
 
     assert main.mark_uncollected_orders() == 3
@@ -249,7 +253,10 @@ def test_uncollected_orders_get_strike_no_refund_and_three_strikes_block(engine)
         assert s.query(Strike).count() == 3
         assert s.query(Order).filter(Order.state == OrderState.uncollected).count() == 3
         assert s.get(User, uid).blocked_until == START + timedelta(days=7)      # FR-09
-        assert s.query(WalletTransaction).count() == 0                           # no refund (FR-08)
+        # CHANGED: the stuck 'preparing' order is cancelled and refunded = exactly 1 ledger row.
+        # The 3 uncollected orders get no refund (FR-08).
+        assert s.query(WalletTransaction).count() == 1
+        assert s.query(Order).filter(Order.state == OrderState.cancelled).count() == 1
     assert main.mark_uncollected_orders() == 0                                   # idempotent: second run does nothing
 
 
@@ -385,7 +392,7 @@ def test_concurrent_orders_keep_invariants(engine):
     Whatever the individual status codes are, these must hold afterwards:
       slot <= 20 orders, stock >= 0 and consistent, wallets >= 0, ledger == balance.
     NOTE: SQLite has no row locks (with_for_update is ignored), so this test is only a smoke test.
-    The real proof needs PostgreSQL + the advisory lock mentioned in place_order."""
+    The real proof needs PostgreSQL + the advisory lock in place_order (switched on by the dialect check)."""
     item = make_item(engine, price=1000, stock=25)
     users = [make_user(engine, f"s{n}@uni.edu", balance=3000) for n in range(30)]
     results = []
@@ -408,3 +415,61 @@ def test_concurrent_orders_keep_invariants(engine):
     for uid in users:
         bal, ledger = balance_and_ledger(engine, uid)
         assert bal == ledger and bal >= 0
+
+
+# ======================================================================= NEW: DB fixes and new rules
+def test_reorder_same_slot_after_cancel(engine, client):
+    # Bug fix: the partial unique index must not count the cancelled order (used to give a 500)
+    make_user(engine, "c@uni.edu", balance=5000)
+    item = make_item(engine)
+    oid = _place(client, "c@uni.edu", item)
+    assert client.post(f"/orders/{oid}/cancel", headers=H("c@uni.edu")).status_code == 200
+    assert client.post("/orders", json=order_body(slot(10), (item, 1)), headers=H("c@uni.edu")).status_code == 201
+
+
+def test_quantity_above_5_is_422(engine, client):
+    # FR-03: LineIn.quantity has le=5, so 6 is refused by validation, not by the DB CHECK
+    make_user(engine, "c@uni.edu", balance=50000)
+    item = make_item(engine, stock=50)
+    assert client.post("/orders", json=order_body(slot(10), (item, 6)), headers=H("c@uni.edu")).status_code == 422
+
+
+def test_ledger_sign_check_rejects_wrong_sign(engine):
+    # The ledger_sign CHECK: a payment row with a positive amount must be refused by the database
+    uid = make_user(engine, "c@uni.edu")
+    with Session(engine) as s:
+        wid = s.query(Wallet).filter(Wallet.user_id == uid).one().id
+        s.add(WalletTransaction(wallet_id=wid, amount=500, kind=TxKind.payment))
+        with pytest.raises(IntegrityError):
+            s.commit()
+
+
+def test_manager_can_reenable_but_not_hide(engine, client):
+    # FR-02 / FR-12: re-enable works; hiding must go through the kitchen withdraw (422)
+    make_user(engine, "m@uni.edu", Role.manager)
+    item = make_item(engine, available=False)
+    assert client.put(f"/menu/{item}", json={"available": True}, headers=H("m@uni.edu")).json()["available"] is True
+    assert client.put(f"/menu/{item}", json={"available": False}, headers=H("m@uni.edu")).status_code == 422
+
+
+def test_stuck_order_job_writes_system_audit_and_no_strike(engine):
+    # Stuck-order rule: placed 40 min after its slot started = cancelled + refunded, no strike, system actor
+    uid = make_user(engine, "c@uni.edu")
+    item = make_item(engine)
+    add_order(engine, uid, START - timedelta(minutes=40), OrderState.placed, [(item, 1, 1000)])
+    main.mark_uncollected_orders()
+    with Session(engine) as s:
+        assert s.query(Strike).count() == 0
+        e = s.query(AuditEntry).filter(AuditEntry.action == "ORDER_EXPIRED_REFUND").one()
+        assert e.actor_id is None                                      # None = system
+
+
+def test_me_returns_strikes_30d(engine, client):
+    # /me counts strikes of the last 30 days with the REAL clock (accounts.py does not use the frozen one)
+    uid = make_user(engine, "c@uni.edu")
+    item = make_item(engine)
+    oid = add_order(engine, uid, START, OrderState.uncollected, [(item, 1, 1000)])
+    with Session(engine) as s:
+        s.add(Strike(user_id=uid, order_id=oid, time=datetime.now()))
+        s.commit()
+    assert client.get("/me", headers=H("c@uni.edu")).json()["strikes_30d"] == 1

@@ -1,19 +1,19 @@
 import secrets
 import sys
-from datetime import datetime, timedelta, date          # NEW: date is used by GET /slots
+from datetime import datetime, timedelta, date          # date is used by GET /slots
 from pathlib import Path
-from typing import Optional                              # NEW: optional query/body fields
-from fastapi import FastAPI, Depends, HTTPException, Header, Query   # NEW: Query is used by GET /audit
+from typing import Optional                              # optional query/body fields
+from fastapi import FastAPI, Depends, HTTPException, Header, Query   # Query is used by GET /audit
 from pydantic import BaseModel, Field
-from sqlalchemy import select, func      # FIX: one import, "select" was imported twice
+from sqlalchemy import select, func, text      # CHANGED: text added (PostgreSQL advisory lock in place_order)
 from sqlalchemy.orm import Session
-from apscheduler.schedulers.background import BackgroundScheduler   # NEW: runs the uncollected job (pip install apscheduler)
+from apscheduler.schedulers.background import BackgroundScheduler   # runs the uncollected job (pip install apscheduler)
 
-# FIX: add the ../Database folder to Python's import path so "cafequick_db" can be found
+# Add the ../Database folder to Python's import path so "cafequick_db" can be found.
+# CHANGED: the duplicated sys.path / import block that used to sit below the models is removed;
+# this single block already imports engine and User.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "Database"))
 
-# FIX: import the module by name (cafequick_db), not by file path; engine and User added for get_db/current_user
-# NEW: Role (for the role check) and Strike (for the uncollected job) added to the import
 from cafequick_db import (engine, User, MenuItem, Wallet, WalletTransaction, Order, OrderLine,
                           OrderState, TxKind, AuditEntry, Role, Strike)
 app = FastAPI()
@@ -29,17 +29,11 @@ app.add_middleware(
 
 class LineIn(BaseModel):
     item_id: int
-    quantity: int = Field(ge=1)
+    quantity: int = Field(ge=1, le=5)      # CHANGED: le=5 matches the DB CHECK qty_1_to_5 (6 used to give a 500)
 
 class OrderIn(BaseModel):
     slot_start: datetime
     lines: list[LineIn] = Field(min_length=1, max_length=5)
-
-
-# FIX for the red underline in your screenshot: cafequick_db.py lives in ../Database,
-# so Python can't find it. Add that folder to the import path BEFORE the cafequick_db import.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "Database"))
-from cafequick_db import engine, User           # engine and User are added to your existing import
 
 
 def get_db():
@@ -69,7 +63,7 @@ def current_user(x_user_email: str = Header(None), db: Session = Depends(get_db)
 
 
 # ======================================================================================
-# NEW (FR-01 / NFR-03): role check dependency.
+# (FR-01 / NFR-03): role check dependency.
 # Usage:  user=Depends(require_role(Role.kitchen))
 # It builds on current_user, so the 401 checks still run first; this only adds the 403.
 # ======================================================================================
@@ -81,24 +75,25 @@ def require_role(*roles: Role):
     return checker
 
 
-# NEW (FR-16): one-line helper so every endpoint writes its audit row the same way.
+# (FR-16): one-line helper so every endpoint writes its audit row the same way.
 # Must be called INSIDE a `with db.begin()` block so the audit row commits with the action.
-def _audit(db: Session, actor_id: int, action: str, target: str):
+# CHANGED: actor_id may be None = action done by the system (the scheduled job), not by a person.
+def _audit(db: Session, actor_id: Optional[int], action: str, target: str):
     db.add(AuditEntry(actor_id=actor_id, action=action, target=target))
 
 
 @app.post("/orders", status_code=201)
-# CHANGED: was Depends(current_user); now only customers can place orders (FR-01)
+# only customers can place orders (FR-01)
 def place_order(body: OrderIn, user=Depends(require_role(Role.customer)), db: Session = Depends(get_db)):
     if body.slot_start < datetime.now() + timedelta(minutes=20):
         raise HTTPException(422, "Slot starts in less than 20 minutes")
 
-    # NEW (FR-03): slot must be on a 15-minute boundary and inside 08:00-15:00
+    # (FR-03): slot must be on a 15-minute boundary and inside 08:00-15:00
     s = body.slot_start
     if s.minute % 15 != 0 or s.second != 0 or not (8 <= s.hour < 15):
         raise HTTPException(422, "Invalid pickup slot")
 
-    # NEW (FR-09): blocked customers cannot order
+    # (FR-09): blocked customers cannot order
     if user.blocked_until and user.blocked_until > datetime.now():
         raise HTTPException(403, "Ordering is blocked until " + user.blocked_until.isoformat())
 
@@ -107,15 +102,16 @@ def place_order(body: OrderIn, user=Depends(require_role(Role.customer)), db: Se
 
         # 1. Slot capacity (max 20) and one order per customer per slot
         # Cancelled orders do not occupy a slot, so they are excluded from both counts.
-        # NOTE: two requests can both read "19" at the same time. On PostgreSQL, uncomment
-        # the next line to serialize requests per slot (see notes below the code):
-        # db.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": int(s.timestamp())})  # needs: from sqlalchemy import text
+        # NEW: on PostgreSQL, serialize orders per slot so two requests cannot both read "19".
+        # SQLite has no advisory locks (and only one writer at a time), so it is skipped there.
+        if db.get_bind().dialect.name == "postgresql":
+            db.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": int(s.timestamp())})
         slot_count = db.scalar(
             select(func.count(Order.id)).where(
                 Order.slot_start == s, Order.state != OrderState.cancelled))
         if slot_count >= 20:
             raise HTTPException(409, "Slot is full")
-        already = db.scalar(                                  # NEW: customer already has an order here?
+        already = db.scalar(                                  # customer already has an order here?
             select(func.count(Order.id)).where(
                 Order.customer_id == user.id, Order.slot_start == s,
                 Order.state != OrderState.cancelled))
@@ -124,12 +120,12 @@ def place_order(body: OrderIn, user=Depends(require_role(Role.customer)), db: Se
 
         # 2. Lock item rows, check stock, decrement it
         total = 0
-        order_lines = []  # NEW: remember (item, quantity) so we can build OrderLines in step 4
-        # FIX: iterate in item_id order so two concurrent orders lock rows in the same order
+        order_lines = []  # remember (item, quantity) so we can build OrderLines in step 4
+        # iterate in item_id order so two concurrent orders lock rows in the same order
         # (different order = possible deadlock)
         for l in sorted(body.lines, key=lambda x: x.item_id):
             item = db.scalar(select(MenuItem).where(MenuItem.id == l.item_id).with_for_update())
-            # FIX: also reject items the kitchen withdrew (item.available is False)
+            # also reject items the kitchen withdrew (item.available is False)
             if not item or not item.available or item.stock < l.quantity:
                 raise HTTPException(409, f"Item {l.item_id} unavailable")
             item.stock -= l.quantity                          # FR-10: reserve stock now
@@ -141,7 +137,6 @@ def place_order(body: OrderIn, user=Depends(require_role(Role.customer)), db: Se
         if wallet.balance < total:
             raise HTTPException(402, "Insufficient balance")
         wallet.balance -= total
-        # FIX: my WalletTransaction has wallet_id (not user_id) and kind is the TxKind enum;
         # the reference is filled after the order id exists (step 4)
         tx = WalletTransaction(wallet_id=wallet.id, amount=-total, kind=TxKind.payment)
         db.add(tx)
@@ -155,7 +150,7 @@ def place_order(body: OrderIn, user=Depends(require_role(Role.customer)), db: Se
             pickup_code=f"{secrets.randbelow(10000):04d}",    # "0000".."9999", keeps leading zeros
         )
         db.add(order)
-        db.flush()                                            # NEW: runs the INSERT so order.id exists
+        db.flush()                                            # runs the INSERT so order.id exists
 
         for item, qty in order_lines:
             db.add(OrderLine(order_id=order.id, item_id=item.id,
@@ -163,7 +158,7 @@ def place_order(body: OrderIn, user=Depends(require_role(Role.customer)), db: Se
         tx.reference = f"order:{order.id}"                    # link ledger row to the order
         db.add(AuditEntry(actor_id=user.id, action="ORDER_PLACED", target=f"order:{order.id}"))  # FR-16
 
-    # NEW: return something useful (the code is shown to the customer when the order is ready)
+    # return something useful (the code is shown to the customer when the order is ready)
     return {"status": "placed", "order_id": order.id, "total": total}
 
 
@@ -180,6 +175,7 @@ class MenuItemUpdate(BaseModel):                   # body for editing name/price
     name: Optional[str] = Field(default=None, min_length=1)
     price: Optional[int] = Field(default=None, ge=0)
     tags: Optional[str] = None
+    available: Optional[bool] = None               # NEW: the manager can only re-enable (True), see update_menu_item
 
 class StockIn(BaseModel):                          # body for setting today's stock
     stock: int = Field(ge=0)
@@ -225,6 +221,12 @@ def update_menu_item(item_id: int, body: MenuItemUpdate,
             item.price = body.price                # old orders keep their own price snapshot (OrderLine.price)
         if body.tags is not None:
             item.tags = body.tags
+        # NEW: re-enable a withdrawn item. Hiding an item must go through the kitchen withdraw,
+        # because that is where the refunds of affected orders happen (FR-12).
+        if body.available is not None:
+            if not body.available:
+                raise HTTPException(422, "Use the kitchen withdraw to withdraw an item")
+            item.available = True
         _audit(db, user.id, "MENU_UPDATED", f"menuitem:{item.id}")
     return _menu_dict(item)
 
@@ -276,7 +278,8 @@ def list_slots(day: Optional[date] = None, user=Depends(current_user), db: Sessi
 # ======================================================================================
 def _refund_order(db: Session, order: Order, now: datetime):
     """Refund the full total, restore stock, mark the order cancelled.
-    Must run INSIDE a `with db.begin()` block. Also reusable for FR-12 (item withdrawal) later."""
+    Must run INSIDE a `with db.begin()` block. Also reused for FR-12 (item withdrawal)
+    and for the stuck-order rule of the uncollected job."""
     # Lock the wallet row, then write the refund ledger row (balance == sum of ledger)
     wallet = db.scalar(select(Wallet).where(Wallet.user_id == order.customer_id).with_for_update())
     db.add(WalletTransaction(wallet_id=wallet.id, amount=order.total,
@@ -311,7 +314,7 @@ def cancel_order(order_id: int, user=Depends(require_role(Role.customer)), db: S
     return {"status": "cancelled", "order_id": order.id, "refunded": order.total}
 
 
-# NEW: small helper endpoint so the customer UI can show their orders and the pickup code (FR-06).
+# small helper endpoint so the customer UI can show their orders and the pickup code (FR-06).
 # The code is only revealed when the order is ready.
 @app.get("/orders/mine")
 def my_orders(user=Depends(require_role(Role.customer)), db: Session = Depends(get_db)):
@@ -432,8 +435,11 @@ def topup_wallet(body: TopupIn, user=Depends(require_role(Role.cashier)), db: Se
 # FR-08 / FR-09: UNCOLLECTED ORDERS JOB
 # ======================================================================================
 def mark_uncollected_orders() -> int:
-    """Ready orders whose slot ended more than 20 minutes ago become 'uncollected':
-    no refund, one Strike. 3 strikes in the last 30 days block the customer for 7 days.
+    """Two rules, both based on slot_start < now - 35 min (15 min slot + 20 min grace):
+    1. A READY order becomes 'uncollected': no refund, one Strike (FR-08). 3 strikes in the last
+       30 days block the customer for 7 days (FR-09). This is the return value.
+    2. NEW: a PLACED or PREPARING order was never finished by the kitchen, so it is not the customer's
+       fault: it is cancelled and fully refunded with NO strike (audit action ORDER_EXPIRED_REFUND).
     Uses its own Session because it runs in a scheduler thread, not inside a request.
     Safe to run twice at once: rows are locked and the state is re-checked by the query."""
     now = datetime.now()
@@ -449,9 +455,8 @@ def mark_uncollected_orders() -> int:
                 order.state = OrderState.uncollected
                 order.closed_at = now
                 db.add(Strike(user_id=order.customer_id, order_id=order.id, time=now))
-                # AuditEntry.actor_id is NOT NULL and there is no "system" user in the schema,
-                # so the customer is used as actor. A dedicated system user would be cleaner.
-                _audit(db, order.customer_id, "ORDER_UNCOLLECTED", f"order:{order.id}")
+                # CHANGED: actor None = system (AuditEntry.actor_id is nullable now), not the customer
+                _audit(db, None, "ORDER_UNCOLLECTED", f"order:{order.id}")
 
                 db.flush()                                    # make the new Strike visible to the count below
                 strikes = db.scalar(select(func.count(Strike.id)).where(
@@ -463,6 +468,17 @@ def mark_uncollected_orders() -> int:
                     if not customer.blocked_until or customer.blocked_until <= now:
                         customer.blocked_until = now + timedelta(days=7)
                 count += 1
+
+            # NEW RULE: placed/preparing orders whose slot started more than 35 min ago were never
+            # finished by the kitchen. Cancel, refund in full, NO strike.
+            # Reuses _refund_order (wallet ledger row + stock restore + state=cancelled).
+            stuck = db.scalars(
+                select(Order).where(Order.state.in_([OrderState.placed, OrderState.preparing]),
+                                    Order.slot_start < cutoff)
+                .order_by(Order.id).with_for_update()).all()   # id order = same lock order everywhere
+            for order in stuck:
+                _refund_order(db, order, now)
+                _audit(db, None, "ORDER_EXPIRED_REFUND", f"order:{order.id}")
     return count
 
 
@@ -482,7 +498,7 @@ def stop_scheduler():
     scheduler.shutdown(wait=False)
 
 
-# NEW: lets you trigger the job by hand to demo / test objective 3 ("simulated week")
+# lets you trigger the job by hand to demo / test objective 3 ("simulated week")
 # without waiting for the clock. Admin only.
 @app.post("/admin/run-uncollected-job")
 def run_uncollected_job(user=Depends(require_role(Role.admin))):
@@ -490,7 +506,7 @@ def run_uncollected_job(user=Depends(require_role(Role.admin))):
 
 
 # ======================================================================================
-# NEW (FR-12): ITEM WITHDRAWAL
+# (FR-12): ITEM WITHDRAWAL
 # The kitchen withdraws an item during the day. The item becomes unavailable and every order
 # that contains it and is still in state "placed" is cancelled and fully refunded.
 # Orders already "preparing" / "ready" are left alone (FR-12: "not yet being prepared").
@@ -524,7 +540,7 @@ def withdraw_menu_item(item_id: int, user=Depends(require_role(Role.kitchen)), d
 
 
 # ======================================================================================
-# NEW (FR-11): DAILY REPORT (manager)
+# (FR-11): DAILY REPORT (manager)
 # Definitions used (write them in the SRS so the figures are reproducible):
 #   - an order belongs to the day of its slot_start
 #   - revenue    = sum of totals of collected + uncollected orders (money the cafeteria keeps;
@@ -571,7 +587,7 @@ def daily_report(day: Optional[date] = None, user=Depends(require_role(Role.mana
 
 
 # ======================================================================================
-# NEW (FR-16): AUDIT LOG VIEW (admin)
+# (FR-16): AUDIT LOG VIEW (admin)
 # Newest first. Optional filter ?action=ORDER_PLACED and ?limit=N (1-500).
 # ======================================================================================
 @app.get("/audit")
@@ -581,7 +597,7 @@ def audit_log(limit: int = Query(100, ge=1, le=500), action: Optional[str] = Non
     if action:
         q = q.where(AuditEntry.action == action)
     rows = db.scalars(q.order_by(AuditEntry.id.desc()).limit(limit)).all()
-    return [{"id": r.id, "actor_id": r.actor_id, "action": r.action, "target": r.target,
+    return [{"id": r.id, "actor_id": r.actor_id, "action": r.action, "target": r.target,   # actor_id None = system
              "timestamp": r.timestamp.isoformat()} for r in rows]
 
 from Backend.accounts import make_accounts_router
