@@ -1,11 +1,15 @@
 # PM_CSP27
-CafeQuick: Cafeteria Pre-Order & Pickup System
+CafeQuick: Cafeteria Pre-Order & Pickup System (SE440 capstone, JUST)
 
-## تشغيل المشروع
+Contents: 1 Run locally | 2 Project in 5 lines | 3 Architecture and file map | 4 Business rules and where they live | 5 Walkthrough of place_order | 6 Concepts you must be able to explain | 7 Order life cycle | 8 Accounts and roles | 9 REST API | 10 Tests | 11 Front end | 12 Gaps vs the brief (be honest in the exam) | 13 Likely exam questions | 14 Presentation outline | 15 Sources to study | 16 Diagrams (PMP 5 and 6)
+
+---
+
+## 1. تشغيل المشروع
 
 > الكودات هون نقطة بداية مش اشي رسمي. عدلو عليها زي ما بدكم او حتى احذفو وابدو من الصفر.
 
-### 1. تنزيل الباكجات المطلوبة
+### 1.1 تنزيل الباكجات المطلوبة
 
 بايثون 3.10 او اعلى. شغلو الامر من المجلد الرئيسي للمشروع:
 
@@ -15,7 +19,7 @@ pip install fastapi uvicorn pydantic sqlalchemy sqlmodel apscheduler pytest pyte
 
 - `sqlmodel` ضروري لملف الداتا بيس، و `pytest` و `pytest-cov` و `httpx` للتستات.
 
-### 2. الداتا بيس (اول مرة او لما بدكم ترجعو البيانات الاصلية)
+### 1.2 الداتا بيس (اول مرة او لما بدكم ترجعو البيانات الاصلية)
 
 ```
 python Database/cafequick_db.py
@@ -25,7 +29,7 @@ python Database/cafequick_db.py
 - انتبهو: بيمسح كل البيانات القديمة قبل ما يعبي من جديد.
 - ملف `cafequick_test.db` مش لازم ينرفع على GitHub. ضيفوه على `.gitignore`.
 
-### 3. تشغيل الباك ايند
+### 1.3 تشغيل الباك ايند
 
 ```
 uvicorn Backend.main:app --reload
@@ -40,7 +44,7 @@ from Backend.accounts import make_accounts_router
 app.include_router(make_accounts_router(get_db, current_user))
 ```
 
-### 4. تشغيل الفرونت ايند
+### 1.4 تشغيل الفرونت ايند
 
 افتحو تيرمينل جديد:
 
@@ -55,7 +59,7 @@ python3 -m http.server 5500
 - على ويندوز لو طلع `Python was not found` شغلو الامر من WSL او استخدمو `python` بدل `python3`.
 - لو غيرتو ملفات الفرونت وما ظهر التغيير، اعملو Ctrl+F5.
 
-### 5. تشغيل التستات
+### 1.5 تشغيل التستات
 
 ```
 pytest Tests --cov=Backend --cov-report=term-missing
@@ -64,7 +68,7 @@ pytest Tests --cov=Backend --cov-report=term-missing
 - شغلوها من المجلد الرئيسي. كل تست بيستخدم داتا بيس مؤقتة، فما بتمس `cafequick_test.db`.
 - المطلوب بالـ brief (NFR-08): تغطية 70% على الاقل.
 
-### 6. هيكلية المشروع
+### 1.6 هيكلية المشروع
 
 ```
 PM_CSP27/
@@ -88,15 +92,123 @@ PM_CSP27/
 
 - تنظيف: اذا لسا موجودين، احذفو `Frontend/app.js` و `Frontend/accounts.py` و `Frontend/test_accounts.py`. هدول نسخ قديمة او مكررة من ملفات موجودة بمكانها الصحيح.
 
+Quick demo path: seed DB, start backend, start front end, sign in as `student1@uni.edu` (page 1), place an order; sign in as `kitchen@uni.edu` (staff page) and mark preparing then ready; as the customer read the pickup code in "My orders"; as `cashier@uni.edu` hand it over with order number and code.
+
 ---
 
-## Accounts and roles
+## 2. Project in 5 lines
+
+- Web app: customers pre-order food for a 15-minute pickup slot and pay from a campus wallet.
+- Kitchen sees a queue by slot; cashier hands over against a 4-digit code and tops up wallets; manager sees a daily report; admin sees the audit log.
+- Rules that cost money or fairness (slot capacity, stock, wallet, refunds, strikes) are enforced in the back end inside one database transaction, never only in the browser.
+- Stack: FastAPI (Python) + SQLModel/SQLAlchemy + SQLite (dev/tests) or PostgreSQL (pilot) + plain HTML/CSS/JavaScript + APScheduler + pytest.
+- Sign-in is simulated SSO (e-mail in the `X-User-Email` header). No passwords exist.
+
+---
+
+## 3. Architecture and file map
+
+Three tiers: browser front end -> REST API (modular monolith, one deployable) -> relational DB. One extra component: a scheduled job inside the API process.
+
+| File | Responsibility |
+|---|---|
+| `Database/cafequick_db.py` | Tables (SQLModel), CHECK constraints, partial unique index, engine (`DATABASE_URL` env var, default SQLite), seed data |
+| `Backend/main.py` | App, CORS, `get_db`, `current_user`, `require_role`, `_audit`, all endpoints, `_refund_order`, `mark_uncollected_orders`, scheduler |
+| `Backend/accounts.py` | `/signup`, `/me`, `/wallet/history` via `make_accounts_router` (a factory, avoids circular import with main.py) |
+| `Frontend/common.js` | `api()` request helper, sign-in, tabs per role, one delegated click listener, 15 s auto-refresh |
+| `Frontend/customer.js` | Slots, menu, cart, my orders, wallet, sign-up |
+| `Frontend/staff.js` | Kitchen queue, withdraw, cashier, report, stock editor, audit, job button |
+| `Tests/conftest.py` | Temp DB per test, frozen clock (`CLOCK`, `FakeDatetime`), helpers (`make_user`, `make_item`, `add_order`, `balance_and_ledger`) |
+| `Tests/test_backend.py`, `Tests/test_accounts.py` | Requirement-named tests |
+
+Data model (money is integer fils, 1 JD = 1000 fils):
+User 1-0..1 Wallet; Wallet 1-* WalletTransaction (ledger); User 1-* Order; Order 1-* OrderLine (price snapshot); Order 0..1 Strike; MenuItem 1-* OrderLine; AuditEntry (actor nullable = system).
+
+---
+
+## 4. Business rules and where they live
+
+| Rule | Brief | Enforced in | Proven by |
+|---|---|---|---|
+| 1 to 5 lines, qty 1 to 5 | FR-03 | `OrderIn`/`LineIn` (Pydantic) + DB CHECK `qty_1_to_5` | `test_more_than_5_lines_rejected`, `test_quantity_above_5_is_422` |
+| Slot on 15-min grid, 08:00 to 14:45 start | FR-03 | `place_order` | `test_invalid_slot_is_422` |
+| At least 20 min ahead | FR-03 | `place_order` | `test_slot_less_than_20_minutes_ahead_is_422` |
+| Max 20 orders per slot | FR-03 | `place_order` count + PG advisory lock | `test_slot_capacity_is_20_objective2` |
+| One order per customer per slot | FR-03 | `place_order` check + partial unique index `one_order_per_slot` | `test_one_order_per_customer_per_slot`, `test_reorder_same_slot_after_cancel` |
+| Pay from wallet, never below 0 | FR-04 | `place_order` + CHECK `wallet_non_negative` | `test_wallet_never_below_zero_...` |
+| Stock reserved at order, released at cancel | FR-10 | `place_order`, `_refund_order` + CHECK `stock_non_negative` | `test_stock_is_never_oversold_objective2`, cancel tests |
+| Cancel until 15 min before slot, only if `placed` | FR-05 | `cancel_order` | `test_cancel_before_window_...`, `test_cancel_after_window_is_409` |
+| Kitchen placed -> preparing -> ready, customer notified | FR-06 | `_kitchen_transition` (notify is a log stub) | `test_kitchen_flow_and_pickup_code` |
+| Pickup needs correct 4-digit code, cashier only | FR-07 | `pickup_order` (`compare_digest`) | same test |
+| Ready order, slot_start + 35 min passed -> uncollected, no refund, strike | FR-08 | `mark_uncollected_orders` | `test_uncollected_orders_get_strike_...` |
+| 3 strikes in 30 days -> blocked 7 days | FR-09 | `mark_uncollected_orders`, checked in `place_order` | same, `test_two_strikes_do_not_block`, `test_old_strikes_...` |
+| Daily report | FR-11 | `daily_report` | `test_daily_report_numbers` |
+| Withdraw item, refund `placed` orders only | FR-12 | `withdraw_menu_item` | `test_withdrawal_refunds_only_...` |
+| Cashier top-up | FR-13 | `topup_wallet` | `test_topup_...` |
+| Tags shown | FR-14 | `_menu_dict`, customer.js | `test_customer_sees_only_...` |
+| Audit log | FR-16 | `_audit` inside each transaction, `/audit` | `test_audit_log_...` |
+| Roles | FR-01 | `require_role` (401 then 403) | `test_role_is_enforced_403` |
+
+The 35 minutes = 15-minute slot length + 20-minute grace. Know this number.
+
+---
+
+## 5. Walkthrough of place_order (the core of the project)
+
+1. `require_role(customer)`: 401 if header missing/unknown, 403 if not a customer.
+2. Cheap checks outside the transaction: 20 minutes ahead, grid and hours, not blocked.
+3. `with db.begin()`: everything below commits together or rolls back together. Raising `HTTPException` rolls back.
+4. PostgreSQL only: `pg_advisory_xact_lock(slot timestamp)` serializes orders for the same slot, so two requests cannot both read "19 orders".
+5. Count non-cancelled orders in slot (>= 20 -> 409). Count customer's orders in slot (-> 409).
+6. For each line, in `item_id` order: `SELECT ... FOR UPDATE` the item, check available and stock, decrement, add price x qty to total. Sorted order prevents deadlocks.
+7. Lock wallet row, check balance (-> 402), subtract, add ledger row (kind payment, negative).
+8. Insert Order (random 4-digit code with `secrets`), flush to get the id, insert OrderLines with price snapshot, set ledger reference `order:<id>`, add audit row.
+9. Commit. Return id and total.
+
+Why `current_user` calls `db.commit()`: its SELECT auto-starts a transaction on the shared session, and `with db.begin()` fails if one is open.
+
+---
+
+## 6. Concepts you must be able to explain
+
+- **Transaction (ACID)**: money, stock and slot checks are one unit. Partial failure leaves nothing changed (test: wallet 500, cheap item + expensive item -> 402, stock of cheap item unchanged).
+- **Row locks `FOR UPDATE`** and **lock ordering**: prevent lost updates and deadlocks. SQLite ignores them (one writer at a time), so the concurrency test is a smoke test only.
+- **Advisory lock**: needed because "count orders in slot" has no row to lock.
+- **Defense in depth**: Pydantic validation -> API checks -> DB CHECK constraints. Even buggy code cannot make a negative wallet or negative stock.
+- **Ledger**: balance is a cached sum of `WalletTransaction` rows; `balance_and_ledger()` in tests asserts they match. `ledger_sign` CHECK stops wrong-sign rows.
+- **Integer fils**: no floating point error with money.
+- **Price snapshot** in `OrderLine.price`: later price edits do not change old orders.
+- **Partial unique index** (`WHERE state != 'cancelled'`): one active order per customer per slot, but re-ordering after cancel works (this was a bug that returned 500).
+- **Pickup code hidden until ready** and **never sent to kitchen**: kitchen cannot hand over by itself; only cashier verifies.
+- **`secrets.compare_digest`**: constant-time compare.
+- **Audit with `actor_id = None`** for system actions (scheduled job).
+- **Scheduler**: APScheduler cron every minute, hours 7 to 15. One uvicorn worker only, otherwise each worker runs the job (still correct because of locks, but wasteful).
+- **Idempotent job**: second run finds nothing (state already changed).
+- **Frozen clock in tests**: business rules depend on time; `FakeDatetime` is patched into `main`. Note `accounts.py` uses the real clock (see `test_me_returns_strikes_30d`).
+- **Event delegation** (front end): one `document` click listener handles every `data-action` button, including buttons created later by `innerHTML`.
+- **`esc()`**: escapes text before `innerHTML` (XSS, OWASP A03).
+
+---
+
+## 7. Order life cycle
+
+| From | To | Trigger | Function |
+|---|---|---|---|
+| (new) | placed | customer POST /orders | `place_order` |
+| placed | cancelled | customer cancel (>= 15 min before slot) or kitchen withdraws an item | `cancel_order`, `withdraw_menu_item` |
+| placed | preparing | kitchen | `_kitchen_transition` |
+| preparing | ready | kitchen, sets `ready_at`, notifies | `_kitchen_transition` |
+| ready | collected | cashier with correct code | `pickup_order` |
+| ready | uncollected | job, slot_start < now - 35 min; strike, no refund | `mark_uncollected_orders` |
+| placed or preparing | cancelled | job, same cutoff, kitchen never finished; full refund, NO strike, audit `ORDER_EXPIRED_REFUND` | `mark_uncollected_orders` (extra rule, not in the brief) |
+
+---
+
+## 8. Accounts and roles
 
 Sign-in is a simulated single sign-on (NFR-03): the page sends the e-mail in the `X-User-Email` header and the backend looks it up. No password exists anywhere. The real system would use the university OpenID Connect provider (Keycloak is the planned test provider).
 
 Each page accepts only its own kind of account. A staff account on `index.html`, or a customer account on `staff.html`, is refused with a message.
-
-### Accounts created by the seed script
 
 | E-mail | Role | Page | Notes |
 |---|---|---|---|
@@ -108,30 +220,24 @@ Each page accepts only its own kind of account. A staff account on `index.html`,
 | `manager@uni.edu` | manager | `staff.html` | Daily report, menu stock. |
 | `admin@uni.edu` | admin | `staff.html` | Audit log, run the uncollected-orders job by hand. |
 
-Staff accounts exist only in the seed data. There is no screen that creates them.
+Staff accounts exist only in the seed data. Sign-up creates customers only (role is not read from the request body).
 
-### Creating a customer account
+Warning: letting a customer pick their own opening balance (max 100 JD) is a demo feature and contradicts FR-13 (only a cashier loads wallets). Controlled by `ALLOW_SELF_FUNDING` in `Backend/accounts.py`; `False` = only 0 JD accepted.
 
-On `index.html`, choose "Create an account", enter a name, any e-mail text (a fake one is fine, it is only an identifier) and the starting wallet balance in JD (maximum 100 JD). The backend creates the user, the wallet, one ledger row for the opening balance and an audit entry, then the page signs the new customer in.
+---
 
-Warning: letting a customer pick their own balance is a demo feature and contradicts FR-13, where only a cashier loads wallets. It is controlled by `ALLOW_SELF_FUNDING` in `Backend/accounts.py`. Set it to `False` and sign-up accepts only a 0 JD opening balance.
+## 9. REST API
 
-### Money
-
-All amounts are integer fils (1 JD = 1000 fils). Every wallet change is also written as a ledger row, so the balance always equals the sum of its transactions.
-
-## REST API outline
-
-All endpoints except `/signup` need the `X-User-Email` header. Interactive documentation: `http://127.0.0.1:8000/docs`.
+All endpoints except `/signup` need the `X-User-Email` header. Interactive docs: `http://127.0.0.1:8000/docs`. Errors: 401 unknown user, 403 wrong role or rule (blocked, wrong code), 404 missing, 409 state/capacity/stock conflict, 402 insufficient balance, 422 validation.
 
 | Method and path | Role | Requirement | What it does |
 |---|---|---|---|
 | `POST /signup` | public | FR-01, FR-04 | Create a customer account with an opening balance. |
-| `GET /me` | any | FR-01 | Name, role, wallet balance, block status. |
+| `GET /me` | any | FR-01 | Name, role, wallet balance, block status, strikes in 30 days. |
 | `GET /wallet/history` | any | FR-04 | Balance and the last 30 ledger rows. |
 | `GET /menu` | any | FR-02, FR-14 | Customers see available items in stock. Kitchen, manager and admin see all. |
 | `POST /menu` | manager | FR-02 | Create an item. |
-| `PUT /menu/{id}` | manager | FR-02 | Edit name, price or tags. |
+| `PUT /menu/{id}` | manager | FR-02 | Edit name, price, tags; can re-enable but not hide an item. |
 | `PUT /menu/{id}/stock` | manager | FR-02 | Set today's stock. |
 | `POST /menu/{id}/withdraw` | kitchen | FR-12 | Withdraw an item, refund orders not yet being prepared. |
 | `GET /slots` | any | FR-03 | The 28 pickup slots with taken and remaining places. |
@@ -147,19 +253,102 @@ All endpoints except `/signup` need the `X-User-Email` header. Interactive docum
 | `GET /audit` | admin | FR-16 | Audit log, newest first, optional `action` filter. |
 | `POST /admin/run-uncollected-job` | admin | FR-08, FR-09 | Run the uncollected-orders job now. |
 
-The uncollected-orders job also runs by itself every minute between 07:00 and 15:59.
-
-## Known limitations
-
-- `X-User-Email` can be forged by anyone, so this sign-in fails NFR-03 outside development. Real OpenID Connect is not implemented.
-- The ready notice (FR-06) only prints to the server log. No e-mail or push is sent.
-- The database is SQLite. Row locks (`with_for_update`) are ignored there, so the concurrency test is only a smoke test. The real proof needs PostgreSQL and the advisory lock noted in `place_order`.
-- Run uvicorn with one worker, otherwise every worker starts its own uncollected-orders job.
-- Not done yet: hourly backups (NFR-09), load test (NFR-01), OWASP Top 10 check (NFR-04), one-command deployment (NFR-10), loyalty points (FR-15, Could).
+Report definitions: an order belongs to the day of its `slot_start`; revenue = collected + uncollected totals (cancelled were refunded, others not final); top items = by quantity in non-cancelled orders, name as tie-breaker.
 
 ---
 
-# CafeQuick diagrams (PMP section 5 and 6)
+## 10. Tests
+
+Run: `pytest Tests --cov=Backend --cov-report=term-missing`. Each test gets a fresh SQLite file; the clock starts Monday 2026-11-09 07:00 and tests move `CLOCK["now"]`.
+
+Groups: auth/roles, menu, ordering rules, cancellation, kitchen + pickup, top-up, uncollected job, withdrawal, manager CRUD, report, audit, concurrency smoke test, DB-constraint tests, accounts. Each test name carries the requirement or objective it proves (use this for the traceability matrix).
+
+Objective 2 ("never overfill, oversell, or go below zero") is proven by: slot capacity test, stock test, wallet test, concurrency test, plus the DB CHECK constraints.
+Objective 3 ("simulated week") is proven by the job tests and the admin "run job" endpoint.
+
+---
+
+## 11. Front end
+
+- Two static pages, no framework. `data-page` on `<body>` tells `common.js` which account type the page accepts.
+- `api(method, path, body, opts)` is the only function that calls `fetch`; it adds `X-User-Email`, shows toasts, and writes the last response into the "developer" box.
+- `GET /me` after sign-in gives role and balance; tabs are built from the role (`TABS`). Backend still enforces roles (the UI is convenience, not security).
+- Cart is built in the DOM (`#lines`); total is computed from `menuCache`; Place order is disabled when the cart is empty, the wallet is too low, or the user is blocked.
+- Accessibility (NFR-06): skip link, focus outline, 44 px buttons, state shown as text not only colour, `aria-live` toast, `prefers-reduced-motion`.
+- Email stored in `sessionStorage` to survive reload.
+
+---
+
+## 12. Gaps vs the brief (state these yourself before the examiner finds them)
+
+- Sign-in header is forgeable: fails NFR-03 outside development. Real OpenID Connect not implemented.
+- Ready notice is a `print`, no e-mail or push (FR-06 partial).
+- Not done: loyalty points FR-15 (Could), hourly backups NFR-09, load test NFR-01, OWASP Top 10 check NFR-04, one-command deploy NFR-10, 5-year transaction retention policy NFR-05, availability measurement NFR-02.
+- SQLite ignores row locks: concurrency not proven until tested on PostgreSQL.
+- Self-funding sign-up contradicts FR-13.
+- Extra behaviour not in brief: stuck-order auto-refund rule, strike counter in `/me`, `/signup`.
+- Cancel rule in brief is "until 15 minutes before the slot while the kitchen has not started it"; code requires state `placed` and `now <= slot_start - 15 min`.
+- Slot capacity 20 is hard-coded in both `main.py` (`SLOT_CAPACITY`) and `customer.js`.
+- One uvicorn worker required (job duplication).
+- Gantt dates are placeholders (week 1 = 2026-10-05).
+- Code is partly AI-generated: the brief requires every use of generative AI to be declared in an appendix (tool, purpose, what was changed). Do this.
+
+---
+
+## 13. Likely exam questions (short answers)
+
+1. How do you guarantee a slot never exceeds 20 orders? One transaction, count inside it, PostgreSQL advisory lock per slot, test with 21 users.
+2. How is a negative wallet prevented? Balance check under row lock + CHECK `balance >= 0`.
+3. Why a ledger? Auditability; finance can reconcile; balance == sum of rows.
+4. Why integers for money? Exactness (constraint in 29.3.5).
+5. A customer cancels 14 minutes before the slot. Result? 409, window closed.
+6. Kitchen withdraws an item that is in a `preparing` order. Result? Order untouched; only `placed` orders are refunded.
+7. When does a ready order become uncollected? When `slot_start + 15 + 20` minutes have passed (job runs every minute).
+8. What happens at the third strike within 30 days? `blocked_until = now + 7 days`; `place_order` returns 403. A running block is not extended.
+9. Why does the kitchen not see the pickup code? Prevents handing over without the customer; cashier verifies.
+10. Why is the clock frozen in tests? Rules depend on time.
+11. What would you change for production? Real OIDC, PostgreSQL, real notifications, backups, HTTPS reverse proxy, remove self-funding.
+12. Why a modular monolith? Small team, one deployable, easy to test (ADR in PMP 5).
+13. Change request scenario (Section C): trace FR -> design element -> code -> test using sections 4 and 10, then show the change-control steps from PMP 4/14.
+14. Calculations (Section B: business case, earned value, risk reserve) use your own PMP figures; they are not in this repo. Re-derive them from your PMP 0, 7, 10 before the test.
+
+---
+
+## 14. Presentation outline (every member must speak; 6 marks)
+
+1. Problem and goal, objectives (sponsor view).
+2. Process: life cycle, schedule, cost, risk (PMP 2, 6, 7, 10).
+3. Architecture: diagrams 1 to 3, ADRs.
+4. Data model and the order state machine (diagrams 4, 5).
+5. Core rules demo logic: place_order walkthrough (section 5).
+6. Live demo: sign up, order, kitchen, ready, pickup, report, uncollected job via admin button, 3-strike block (`student10`).
+7. Test evidence and coverage; security and gaps (section 12).
+8. Lessons learned and closure.
+
+---
+
+## 15. Sources to study
+
+Official:
+- FastAPI tutorial (dependencies, security, testing): https://fastapi.tiangolo.com/tutorial/
+- SQLModel: https://sqlmodel.tiangolo.com/
+- SQLAlchemy 2.0 (sessions, transactions, `with_for_update`): https://docs.sqlalchemy.org/en/20/
+- PostgreSQL explicit locking and advisory locks: https://www.postgresql.org/docs/current/explicit-locking.html
+- SQLite partial indexes: https://www.sqlite.org/partialindex.html
+- APScheduler user guide: https://apscheduler.readthedocs.io/
+- pytest fixtures and monkeypatch: https://docs.pytest.org/
+- OWASP Top 10: https://owasp.org/www-project-top-ten/
+- OpenID Connect Core: https://openid.net/specs/openid-connect-core-1_0.html
+- WCAG 2.1 quick reference: https://www.w3.org/WAI/WCAG21/quickref/
+- C4 model: https://c4model.com/
+- Mermaid syntax: https://mermaid.js.org/
+
+Book (the official treatment of transactions, isolation, locks): Kleppmann, Designing Data-Intensive Applications, chapter 7.
+Course side: PMBOK Guide (PMI) and SWEBOK V4 (IEEE Computer Society) for the PMP sections.
+
+---
+
+# 16. CafeQuick diagrams (PMP section 5 and 6)
 
 Mermaid source. GitHub renders these blocks directly. To get images for the PDF, paste a block into
 https://mermaid.live and export PNG/SVG (check it is readable when printed, as the brief requires).
