@@ -1,5 +1,7 @@
 import secrets
 import sys
+import threading
+from contextlib import nullcontext
 from datetime import datetime, timedelta, date          # date is used by GET /slots
 from pathlib import Path
 from typing import Optional                              # optional query/body fields
@@ -17,6 +19,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "Database"))
 from cafequick_db import (engine, User, MenuItem, Wallet, WalletTransaction, Order, OrderLine,
                           OrderState, TxKind, AuditEntry, Role, Strike)
 app = FastAPI()
+
+# SQLite ignores SELECT ... FOR UPDATE. This process-local mutex keeps the slot-capacity
+# check and order insert atomic for concurrent request threads in the single-worker dev/test
+# setup. It is NOT a cross-process lock; PostgreSQL uses the transaction-scoped advisory lock.
+_sqlite_order_lock = threading.Lock()
 
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -97,68 +104,72 @@ def place_order(body: OrderIn, user=Depends(require_role(Role.customer)), db: Se
     if user.blocked_until and user.blocked_until > datetime.now():
         raise HTTPException(403, "Ordering is blocked until " + user.blocked_until.isoformat())
 
-    with db.begin():  # one transaction: all checks and writes commit or roll back together
-        # (raising HTTPException inside this block rolls everything back automatically)
-
-        # 1. Slot capacity (max 20) and one order per customer per slot
-        # Cancelled orders do not occupy a slot, so they are excluded from both counts.
-        # NEW: on PostgreSQL, serialize orders per slot so two requests cannot both read "19".
-        # SQLite has no advisory locks (and only one writer at a time), so it is skipped there.
-        if db.get_bind().dialect.name == "postgresql":
-            db.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": int(s.timestamp())})
-        slot_count = db.scalar(
-            select(func.count(Order.id)).where(
-                Order.slot_start == s, Order.state != OrderState.cancelled))
-        if slot_count >= 20:
-            raise HTTPException(409, "Slot is full")
-        already = db.scalar(                                  # customer already has an order here?
-            select(func.count(Order.id)).where(
-                Order.customer_id == user.id, Order.slot_start == s,
-                Order.state != OrderState.cancelled))
-        if already:
-            raise HTTPException(409, "You already have an order in this slot")
-
-        # 2. Lock item rows, check stock, decrement it
-        total = 0
-        order_lines = []  # remember (item, quantity) so we can build OrderLines in step 4
-        # iterate in item_id order so two concurrent orders lock rows in the same order
-        # (different order = possible deadlock)
-        for l in sorted(body.lines, key=lambda x: x.item_id):
-            item = db.scalar(select(MenuItem).where(MenuItem.id == l.item_id).with_for_update())
-            # also reject items the kitchen withdrew (item.available is False)
-            if not item or not item.available or item.stock < l.quantity:
-                raise HTTPException(409, f"Item {l.item_id} unavailable")
-            item.stock -= l.quantity                          # FR-10: reserve stock now
-            total += item.price * l.quantity   # use integer fils, not float
-            order_lines.append((item, l.quantity))
-
-        # 3. Lock wallet row, check balance, write a ledger row
-        wallet = db.scalar(select(Wallet).where(Wallet.user_id == user.id).with_for_update())
-        if wallet.balance < total:
-            raise HTTPException(402, "Insufficient balance")
-        wallet.balance -= total
-        # the reference is filled after the order id exists (step 4)
-        tx = WalletTransaction(wallet_id=wallet.id, amount=-total, kind=TxKind.payment)
-        db.add(tx)
-
-        # 4. Create Order + OrderLines with a 4-digit pickup code
-        order = Order(
-            customer_id=user.id,
-            slot_start=s,
-            state=OrderState.placed,
-            total=total,
-            pickup_code=f"{secrets.randbelow(10000):04d}",    # "0000".."9999", keeps leading zeros
-        )
-        db.add(order)
-        db.flush()                                            # runs the INSERT so order.id exists
-
-        for item, qty in order_lines:
-            db.add(OrderLine(order_id=order.id, item_id=item.id,
-                             quantity=qty, price=item.price))  # price snapshot at order time
-        tx.reference = f"order:{order.id}"                    # link ledger row to the order
-        db.add(AuditEntry(actor_id=user.id, action="ORDER_PLACED", target=f"order:{order.id}"))  # FR-16
-
-    # return something useful (the code is shown to the customer when the order is ready)
+    # SQLite needs an in-process lock because it ignores FOR UPDATE. The lock spans
+    # the complete transaction, including commit; PostgreSQL uses its advisory lock instead.
+    lock = _sqlite_order_lock if db.get_bind().dialect.name == "sqlite" else nullcontext()
+    with lock:
+        with db.begin():  # one transaction: all checks and writes commit or roll back together
+            # (raising HTTPException inside this block rolls everything back automatically)
+    
+            # 1. Slot capacity (max 20) and one order per customer per slot
+            # Cancelled orders do not occupy a slot, so they are excluded from both counts.
+            # NEW: on PostgreSQL, serialize orders per slot so two requests cannot both read "19".
+            # SQLite has no advisory locks (and only one writer at a time), so it is skipped there.
+            if db.get_bind().dialect.name == "postgresql":
+                db.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": int(s.timestamp())})
+            slot_count = db.scalar(
+                select(func.count(Order.id)).where(
+                    Order.slot_start == s, Order.state != OrderState.cancelled))
+            if slot_count >= 20:
+                raise HTTPException(409, "Slot is full")
+            already = db.scalar(                                  # customer already has an order here?
+                select(func.count(Order.id)).where(
+                    Order.customer_id == user.id, Order.slot_start == s,
+                    Order.state != OrderState.cancelled))
+            if already:
+                raise HTTPException(409, "You already have an order in this slot")
+    
+            # 2. Lock item rows, check stock, decrement it
+            total = 0
+            order_lines = []  # remember (item, quantity) so we can build OrderLines in step 4
+            # iterate in item_id order so two concurrent orders lock rows in the same order
+            # (different order = possible deadlock)
+            for l in sorted(body.lines, key=lambda x: x.item_id):
+                item = db.scalar(select(MenuItem).where(MenuItem.id == l.item_id).with_for_update())
+                # also reject items the kitchen withdrew (item.available is False)
+                if not item or not item.available or item.stock < l.quantity:
+                    raise HTTPException(409, f"Item {l.item_id} unavailable")
+                item.stock -= l.quantity                          # FR-10: reserve stock now
+                total += item.price * l.quantity   # use integer fils, not float
+                order_lines.append((item, l.quantity))
+    
+            # 3. Lock wallet row, check balance, write a ledger row
+            wallet = db.scalar(select(Wallet).where(Wallet.user_id == user.id).with_for_update())
+            if wallet.balance < total:
+                raise HTTPException(402, "Insufficient balance")
+            wallet.balance -= total
+            # the reference is filled after the order id exists (step 4)
+            tx = WalletTransaction(wallet_id=wallet.id, amount=-total, kind=TxKind.payment)
+            db.add(tx)
+    
+            # 4. Create Order + OrderLines with a 4-digit pickup code
+            order = Order(
+                customer_id=user.id,
+                slot_start=s,
+                state=OrderState.placed,
+                total=total,
+                pickup_code=f"{secrets.randbelow(10000):04d}",    # "0000".."9999", keeps leading zeros
+            )
+            db.add(order)
+            db.flush()                                            # runs the INSERT so order.id exists
+    
+            for item, qty in order_lines:
+                db.add(OrderLine(order_id=order.id, item_id=item.id,
+                                 quantity=qty, price=item.price))  # price snapshot at order time
+            tx.reference = f"order:{order.id}"                    # link ledger row to the order
+            db.add(AuditEntry(actor_id=user.id, action="ORDER_PLACED", target=f"order:{order.id}"))  # FR-16
+    
+        # return something useful (the code is shown to the customer when the order is ready)
     return {"status": "placed", "order_id": order.id, "total": total}
 
 
