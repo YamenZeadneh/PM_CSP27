@@ -218,3 +218,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# CafeQuick local development/test database (never commit local data)
+cafequick_test.db
+cafequick_test.db-journal
+cafequick_test.db-wal
+cafequick_test.db-shm
