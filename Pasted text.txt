@@ -1,0 +1,222 @@
+yamin@DESKTOP-9NDFVVG:/mnt/c/Users/yamin/Desktop/collage/PM/PM_CSP27$ git pull
+python3 -m pytest Tests --cov=Backend --cov-report=term-missing
+remote: Enumerating objects: 14, done.
+remote: Counting objects: 100% (14/14), done.
+remote: Compressing objects: 100% (10/10), done.
+remote: Total 10 (delta 6), reused 0 (delta 0), pack-reused 0 (from 0)
+Unpacking objects: 100% (10/10), 6.40 KiB | 86.00 KiB/s, done.
+From https://github.com/YamenZeadneh/PM_CSP27
+   02d6793..41b16a4  main       -> origin/main
+Updating 02d6793..41b16a4
+Fast-forward
+ Backend/main.py | 135 ++++++++++++++++++++++++++++++---------------------------
+ README.md       | 233 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++-
+ 2 files changed, 304 insertions(+), 64 deletions(-)
+=================================================== test session starts ===================================================
+platform linux -- Python 3.14.4, pytest-9.0.2, pluggy-1.6.0
+rootdir: /mnt/c/Users/yamin/Desktop/collage/PM/PM_CSP27
+plugins: anyio-4.15.1, cov-7.1.0, typeguard-4.4.4
+collected 46 items                                                                                                        
+
+Tests/test_accounts.py ......                                                                                       [ 13%]
+Tests/test_backend.py ........................................                                                      [100%]
+
+==================================================== warnings summary =====================================================
+Backend/main.py:501
+  /mnt/c/Users/yamin/Desktop/collage/PM/PM_CSP27/Backend/main.py:501: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+../../../../../../../../home/yamin/.local/lib/python3.14/site-packages/fastapi/applications.py:4723
+../../../../../../../../home/yamin/.local/lib/python3.14/site-packages/fastapi/applications.py:4723
+  /home/yamin/.local/lib/python3.14/site-packages/fastapi/applications.py:4723: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)  # ty: ignore[deprecated]
+
+Backend/main.py:507
+  /mnt/c/Users/yamin/Desktop/collage/PM/PM_CSP27/Backend/main.py:507: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("shutdown")
+
+Tests/test_accounts.py: 2 warnings
+Tests/test_backend.py: 36 warnings
+  /mnt/c/Users/yamin/Desktop/collage/PM/PM_CSP27/Tests/conftest.py:116: DeprecationWarning: 
+          🚨 You probably want to use `session.exec()` instead of `session.query()`.
+  
+          `session.exec()` is SQLModel's own short version with improved type
+          annotations.
+  
+          Otherwise, you might want to use `session.execute()` instead of
+          `session.query()`.
+          
+    w = s.query(Wallet).filter(Wallet.user_id == user_id).one()
+
+Tests/test_accounts.py: 2 warnings
+Tests/test_backend.py: 36 warnings
+  /mnt/c/Users/yamin/Desktop/collage/PM/PM_CSP27/Tests/conftest.py:117: DeprecationWarning: 
+          🚨 You probably want to use `session.exec()` instead of `session.query()`.
+  
+          `session.exec()` is SQLModel's own short version with improved type
+          annotations.
+  
+          Otherwise, you might want to use `session.execute()` instead of
+          `session.query()`.
+          
+    total = sum(t.amount for t in s.query(WalletTransaction).filter(WalletTransaction.wallet_id == w.id))
+
+Tests/test_accounts.py::test_signup_creates_customer_wallet_and_ledger_row
+  /mnt/c/Users/yamin/Desktop/collage/PM/PM_CSP27/Tests/test_accounts.py:23: DeprecationWarning: 
+          🚨 You probably want to use `session.exec()` instead of `session.query()`.
+  
+          `session.exec()` is SQLModel's own short version with improved type
+          annotations.
+  
+          Otherwise, you might want to use `session.execute()` instead of
+          `session.query()`.
+          
+    assert s.query(AuditEntry).filter(AuditEntry.action == "ACCOUNT_CREATED").count() == 1
+
+Tests/test_backend.py::test_slot_capacity_is_20_objective2
+  /mnt/c/Users/yamin/Desktop/collage/PM/PM_CSP27/Tests/test_backend.py:92: DeprecationWarning: 
+          🚨 You probably want to use `session.exec()` instead of `session.query()`.
+  
+          `session.exec()` is SQLModel's own short version with improved type
+          annotations.
+  
+          Otherwise, you might want to use `session.execute()` instead of
+          `session.query()`.
+          
+    assert s.query(Order).count() == 20
+
+Tests/test_backend.py::test_wallet_never_below_zero_and_failed_order_rolls_back_objective2
+  /mnt/c/Users/yamin/Desktop/collage/PM/PM_CSP27/Tests/test_backend.py:121: DeprecationWarning: 
+          🚨 You probably want to use `session.exec()` instead of `session.query()`.
+  
+          `session.exec()` is SQLModel's own short version with improved type
+          annotations.
+  
+          Otherwise, you might want to use `session.execute()` instead of
+          `session.query()`.
+          
+    assert s.query(Order).count() == 0
+
+Tests/test_backend.py::test_uncollected_orders_get_strike_no_refund_and_three_strikes_block
+  /mnt/c/Users/yamin/Desktop/collage/PM/PM_CSP27/Tests/test_backend.py:253: DeprecationWarning: 
+          🚨 You probably want to use `session.exec()` instead of `session.query()`.
+  
+          `session.exec()` is SQLModel's own short version with improved type
+          annotations.
+  
+          Otherwise, you might want to use `session.execute()` instead of
+          `session.query()`.
+          
+    assert s.query(Strike).count() == 3
+
+Tests/test_backend.py::test_uncollected_orders_get_strike_no_refund_and_three_strikes_block
+  /mnt/c/Users/yamin/Desktop/collage/PM/PM_CSP27/Tests/test_backend.py:254: DeprecationWarning: 
+          🚨 You probably want to use `session.exec()` instead of `session.query()`.
+  
+          `session.exec()` is SQLModel's own short version with improved type
+          annotations.
+  
+          Otherwise, you might want to use `session.execute()` instead of
+          `session.query()`.
+          
+    assert s.query(Order).filter(Order.state == OrderState.uncollected).count() == 3
+
+Tests/test_backend.py::test_uncollected_orders_get_strike_no_refund_and_three_strikes_block
+  /mnt/c/Users/yamin/Desktop/collage/PM/PM_CSP27/Tests/test_backend.py:258: DeprecationWarning: 
+          🚨 You probably want to use `session.exec()` instead of `session.query()`.
+  
+          `session.exec()` is SQLModel's own short version with improved type
+          annotations.
+  
+          Otherwise, you might want to use `session.execute()` instead of
+          `session.query()`.
+          
+    assert s.query(WalletTransaction).count() == 1
+
+Tests/test_backend.py::test_uncollected_orders_get_strike_no_refund_and_three_strikes_block
+  /mnt/c/Users/yamin/Desktop/collage/PM/PM_CSP27/Tests/test_backend.py:259: DeprecationWarning: 
+          🚨 You probably want to use `session.exec()` instead of `session.query()`.
+  
+          `session.exec()` is SQLModel's own short version with improved type
+          annotations.
+  
+          Otherwise, you might want to use `session.execute()` instead of
+          `session.query()`.
+          
+    assert s.query(Order).filter(Order.state == OrderState.cancelled).count() == 1
+
+Tests/test_backend.py::test_concurrent_orders_keep_invariants
+  /mnt/c/Users/yamin/Desktop/collage/PM/PM_CSP27/Tests/test_backend.py:411: DeprecationWarning: 
+          🚨 You probably want to use `session.exec()` instead of `session.query()`.
+  
+          `session.exec()` is SQLModel's own short version with improved type
+          annotations.
+  
+          Otherwise, you might want to use `session.execute()` instead of
+          `session.query()`.
+          
+    orders = s.query(Order).count()
+
+Tests/test_backend.py::test_ledger_sign_check_rejects_wrong_sign
+  /mnt/c/Users/yamin/Desktop/collage/PM/PM_CSP27/Tests/test_backend.py:441: DeprecationWarning: 
+          🚨 You probably want to use `session.exec()` instead of `session.query()`.
+  
+          `session.exec()` is SQLModel's own short version with improved type
+          annotations.
+  
+          Otherwise, you might want to use `session.execute()` instead of
+          `session.query()`.
+          
+    wid = s.query(Wallet).filter(Wallet.user_id == uid).one().id
+
+Tests/test_backend.py::test_stuck_order_job_writes_system_audit_and_no_strike
+  /mnt/c/Users/yamin/Desktop/collage/PM/PM_CSP27/Tests/test_backend.py:462: DeprecationWarning: 
+          🚨 You probably want to use `session.exec()` instead of `session.query()`.
+  
+          `session.exec()` is SQLModel's own short version with improved type
+          annotations.
+  
+          Otherwise, you might want to use `session.execute()` instead of
+          `session.query()`.
+          
+    assert s.query(Strike).count() == 0
+
+Tests/test_backend.py::test_stuck_order_job_writes_system_audit_and_no_strike
+  /mnt/c/Users/yamin/Desktop/collage/PM/PM_CSP27/Tests/test_backend.py:463: DeprecationWarning: 
+          🚨 You probably want to use `session.exec()` instead of `session.query()`.
+  
+          `session.exec()` is SQLModel's own short version with improved type
+          annotations.
+  
+          Otherwise, you might want to use `session.execute()` instead of
+          `session.query()`.
+          
+    e = s.query(AuditEntry).filter(AuditEntry.action == "ORDER_EXPIRED_REFUND").one()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+===================================================== tests coverage ======================================================
+_____________________________________ coverage: platform linux, python 3.14.4-final-0 _____________________________________
+
+Name                  Stmts   Miss  Cover   Missing
+---------------------------------------------------
+Backend/accounts.py      53      2    96%   66, 84
+Backend/main.py         324      7    98%   119, 234, 410, 437, 503-505, 509
+---------------------------------------------------
+TOTAL                   377      9    98%
+============================================= 46 passed, 91 warnings in 2.38s =============================================
+yamin@DESKTOP-9NDFVVG:/mnt/c/Users/yamin/Desktop/collage/PM/PM_CSP27$ 
