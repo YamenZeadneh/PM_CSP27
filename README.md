@@ -279,19 +279,43 @@ Objective 3 ("simulated week") is proven by the job tests and the admin "run job
 
 ---
 
-## 12. Gaps vs the brief (state these yourself before the examiner finds them)
+## 12. Known limitations and gaps vs the brief
 
-- Sign-in header is forgeable: fails NFR-03 outside development. Real OpenID Connect not implemented.
-- Ready notice is a `print`, no e-mail or push (FR-06 partial).
-- Not done: loyalty points FR-15 (Could), hourly backups NFR-09, load test NFR-01, OWASP Top 10 check NFR-04, one-command deploy NFR-10, 5-year transaction retention policy NFR-05, availability measurement NFR-02.
-- SQLite ignores row locks: concurrency not proven until tested on PostgreSQL.
-- Self-funding sign-up contradicts FR-13.
-- Extra behaviour not in brief: stuck-order auto-refund rule, strike counter in `/me`, `/signup`.
-- Cancel rule in brief is "until 15 minutes before the slot while the kitchen has not started it"; code requires state `placed` and `now <= slot_start - 15 min`.
-- Slot capacity 20 is hard-coded in both `main.py` (`SLOT_CAPACITY`) and `customer.js`.
-- One uvicorn worker required (job duplication).
-- Gantt dates are placeholders (week 1 = 2026-10-05).
-- Code is partly AI-generated: the brief requires every use of generative AI to be declared in an appendix (tool, purpose, what was changed). Do this.
+These are limitations of the current prototype. A passing test suite does not mean these operational or integration requirements are complete.
+
+### Security and identity
+- **Authentication is simulated, not secure SSO:** the API trusts the caller-supplied `X-User-Email` header. A client can forge it. University OpenID Connect (OIDC), token validation and server-side identity derivation are not implemented. Do not expose this prototype to untrusted users.
+- **Transport security is not configured:** local development uses HTTP. TLS/reverse-proxy configuration is still required for a real deployment.
+- **Security assurance is incomplete:** no documented OWASP Top 10 assessment or penetration test has been completed (NFR-04).
+
+### Database and concurrency
+- SQLite ignores `SELECT ... FOR UPDATE`. The development/test implementation now serializes SQLite order-placement transactions with a process-local lock. This protects the current single-process test setup only; it is not a distributed or multi-worker lock.
+- PostgreSQL uses a transaction-scoped advisory lock for slot capacity, but the concurrency suite has **not yet been run against PostgreSQL**. PostgreSQL behavior for slot capacity, stock reservation and wallet debit remains unverified.
+- SQLite is the default local/test database. PostgreSQL is the intended pilot database; production migration, backup and restore procedures still need verification.
+- The slot capacity (20) is duplicated in backend and frontend code and should eventually be moved to shared configuration/API data.
+
+### Integrations and operations
+- Ready-order notification is a `print`/log stub; no e-mail or push provider is integrated (FR-06 is partial).
+- APScheduler runs inside the API process. Run one Uvicorn worker in the current deployment model; multiple workers can start duplicate schedulers. A dedicated scheduler worker or distributed coordination is needed before scaling workers.
+- Hourly backups and a restore rehearsal (NFR-09), availability measurement/monitoring (NFR-02), load testing (NFR-01), and one-command deployment (NFR-10) have not been demonstrated.
+- Browser compatibility evidence (NFR-07) and a formal WCAG accessibility audit (NFR-06) have not been recorded.
+- Five-year transaction retention and privacy controls (NFR-05) need a defined and implemented policy.
+
+### Functional scope and project decisions
+- Loyalty points (FR-15, Could) are not implemented.
+- Self-funding during sign-up is enabled in the prototype and conflicts with the cashier-only wallet top-up rule (FR-13). Disable it before a pilot.
+- The code automatically refunds stuck `placed`/`preparing` orders after the timeout. This behavior is additional to the brief and requires TA/sponsor confirmation.
+- The `/signup` and strike information in `/me` are prototype additions; confirm their acceptance and security requirements.
+- Slot capacity is 20 in both `Backend/main.py` and `Frontend/customer.js`; the values can drift.
+- The Gantt dates are planning placeholders (week 1 = 2026-10-05), not verified actual completion dates.
+- Generative-AI use must be declared in the project appendix as required by the brief (tool, purpose and what the team changed/reviewed).
+
+### Test evidence (local run, 20 November 2026)
+- `python3 -m pytest Tests --cov=Backend --cov-report=term-missing`: **46 passed, 0 failed**.
+- Backend statement coverage: **98%** (377 statements, 9 missed); `Backend/main.py` 98%, `Backend/accounts.py` 96%.
+- The run emitted 91 deprecation warnings. These were warnings, not test failures.
+- The concurrency test passed on SQLite with the process-local lock. This is not evidence of PostgreSQL or multi-process concurrency correctness.
+- Coverage is a result from this specific local run; rerun the command after code changes and retain the terminal report as evidence.
 
 ---
 
