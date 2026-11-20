@@ -7,94 +7,111 @@ Contents: 1 Run locally | 2 Project in 5 lines | 3 Architecture and file map | 4
 
 ## 1. تشغيل المشروع
 
-> الكودات هون نقطة بداية مش اشي رسمي. عدلو عليها زي ما بدكم.
+<badge>حالة المشروع: مكتمل كنموذج أولي أكاديمي</badge>
 
-### 1.1 تنزيل الباكجات المطلوبة
+تم إنجاز النسخة الحالية من **CafeQuick**، وتشمل واجهة الزبون والموظفين، والـ API، وإدارة الطلبات والمخزون والمحفظة، وأدوار المستخدمين، وتقارير الإدارة وسجل التدقيق، بالإضافة إلى الاختبارات والتوثيق. نتائج آخر تشغيل للاختبارات موضحة أدناه.
 
-بايثون 3.10 او اعلى. شغلو الامر من المجلد الرئيسي للمشروع:
+**ملاحظة مهمة:** اكتمال النسخة الأكاديمية لا يعني جاهزيتها للنشر التجاري أو الإنتاجي. القيود والتكاملات غير المنجزة موثقة بالتفصيل في القسم **12. Known limitations and gaps vs the brief**، وأهمها أن تسجيل الدخول تجريبي وليس OIDC فعلياً، وأن اختبار التزامن على PostgreSQL لم يُنفذ بعد.
 
+### 1.1 المتطلبات
+
+- Python 3.10 أو أحدث.
+- نفّذ الأوامر من المجلد الرئيسي للمشروع:
+
+```bash
+python -m pip install fastapi uvicorn pydantic sqlalchemy sqlmodel apscheduler pytest pytest-cov httpx
 ```
-pip install fastapi uvicorn pydantic sqlalchemy sqlmodel apscheduler pytest pytest-cov httpx
-```
 
-- `sqlmodel` ضروري لملف الداتا بيس، و `pytest` و `pytest-cov` و `httpx` للتستات.
+على Linux أو WSL، يمكن استخدام `python3` بدلاً من `python` إذا كان هذا هو اسم أمر Python المتاح.
 
-### 1.2 الداتا بيس (اول مرة او لما بدكم ترجعو البيانات الاصلية)
+### 1.2 إنشاء قاعدة البيانات التجريبية
 
-```
+لإنشاء قاعدة البيانات وإضافة البيانات التجريبية:
+
+```bash
 python Database/cafequick_db.py
 ```
 
-- بينشئ ملف `cafequick_test.db` وبيعبيه بيانات تجريبية (20 زبون، 4 موظفين، 10 اصناف، طلبات بكل الحالات).
-- انتبهو: بيمسح كل البيانات القديمة قبل ما يعبي من جديد.
-- ملف `cafequick_test.db` مش لازم ينرفع على GitHub. ضيفوه على `.gitignore`.
+- ينشئ الأمر ملف `cafequick_test.db` ويضيف بيانات تجريبية للمستخدمين والموظفين والأصناف والطلبات.
+- **تنبيه:** إعادة تشغيله تعيد تهيئة قاعدة البيانات وقد تحذف البيانات الموجودة فيها.
+- ملف قاعدة البيانات محلي ومضاف إلى `.gitignore`؛ لا ترفع قاعدة بياناتك المحلية إلى GitHub.
 
-### 1.3 تشغيل الباك ايند
+### 1.3 تشغيل الخادم الخلفي (Backend)
 
-```
-uvicorn Backend.main:app --reload
-```
-
-- شغلوه من المجلد الرئيسي (مش من جوا مجلد Backend).
-- التوثيق التلقائي للـ API بيطلع على: http://127.0.0.1:8000/docs
-- لازم يكون بآخر `Backend/main.py` هالسطرين (هني اللي بيفعلو التسجيل وصفحة المحفظة):
-
-```python
-from Backend.accounts import make_accounts_router
-app.include_router(make_accounts_router(get_db, current_user))
+```bash
+python -m uvicorn Backend.main:app --reload
 ```
 
-### 1.4 تشغيل الفرونت ايند
+- شغّل الأمر من المجلد الرئيسي للمشروع.
+- توثيق الـ API متاح عبر: http://127.0.0.1:8000/docs
+- في إعداد التشغيل الحالي، استخدم عاملاً واحداً لـ Uvicorn بسبب تشغيل المجدول داخل عملية الـ API.
 
-افتحو تيرمينل جديد:
+### 1.4 تشغيل الواجهة الأمامية (Frontend)
 
-```
+افتح نافذة Terminal ثانية:
+
+```bash
 cd Frontend
-python3 -m http.server 5500
+python -m http.server 5500
 ```
 
-- صفحة الزبون: http://localhost:5500
-- صفحة الموظفين (شيف، كاشير، مدير، ادمن): http://localhost:5500/staff.html
-- استخدمو `localhost` او `127.0.0.1` مش `0.0.0.0`. الباك ايند بيسمح (CORS) بس لهدول العنوانين، و `0.0.0.0` اصلا ما بيفتح بالمتصفح.
-- على ويندوز لو طلع `Python was not found` شغلو الامر من WSL او استخدمو `python` بدل `python3`.
-- لو غيرتو ملفات الفرونت وما ظهر التغيير، اعملو Ctrl+F5.
+ثم افتح:
 
-### 1.5 تشغيل التستات
+- واجهة الزبون: http://localhost:5500
+- واجهة الموظفين: http://localhost:5500/staff.html
 
+استخدم `localhost` أو `127.0.0.1`. إذا لم تظهر تغييرات الواجهة، حدّث الصفحة باستخدام `Ctrl+F5`.
+
+### 1.5 تشغيل الاختبارات ونتائجها
+
+من المجلد الرئيسي للمشروع:
+
+```bash
+python -m pytest Tests --cov=Backend --cov-report=term-missing
 ```
-pytest Tests --cov=Backend --cov-report=term-missing
-```
 
-- شغلوها من المجلد الرئيسي. كل تست بيستخدم داتا بيس مؤقتة، فما بتمس `cafequick_test.db`.
-- المطلوب بالـ brief (NFR-08): تغطية 70% على الاقل.
+**آخر نتيجة موثقة لتشغيل الاختبارات:**
+
+| المؤشر | النتيجة |
+|---|---:|
+| الاختبارات الناجحة | 46 |
+| الاختبارات الفاشلة | 0 |
+| تغطية Backend الإجمالية | 98% |
+| التغطية في `Backend/main.py` | 98% |
+| التغطية في `Backend/accounts.py` | 96% |
+
+هذه النتائج تخص تشغيل الاختبارات بتاريخ 20-11-2026. أعد تشغيل الأمر بعد أي تعديل على الكود. نجاح اختبارات SQLite لا يُعد إثباتاً لاكتمال اختبار التزامن على PostgreSQL.
 
 ### 1.6 هيكلية المشروع
 
 ```
 PM_CSP27/
   Backend/
-    main.py            الـ API الرئيسي: الطلبات، المطبخ، المحفظة، التقارير، job الطلبات غير المستلمة
-    accounts.py        التسجيل (signup) و /me و سجل المحفظة
+    main.py
+    accounts.py
   Database/
-    cafequick_db.py    الجداول + البيانات التجريبية
+    cafequick_db.py
   Frontend/
-    index.html         صفحة الزبون (تسجيل دخول، انشاء حساب، طلب، طلباتي، المحفظة)
-    staff.html         صفحة الموظفين (مطبخ، كاشير، تقرير، ادمن)
-    common.js          الكود المشترك: الطلبات للـ API، تسجيل الدخول، التابات
-    customer.js        شاشات الزبون
-    staff.js           شاشات الموظفين
+    index.html
+    staff.html
+    common.js
+    customer.js
+    staff.js
     style.css
   Tests/
-    conftest.py        اعدادات التستات (داتا بيس مؤقتة + ساعة ثابتة)
+    conftest.py
     test_backend.py
     test_accounts.py
 ```
 
-- تنظيف: اذا لسا موجودين، احذفو `Frontend/app.js` و `Frontend/accounts.py` و `Frontend/test_accounts.py`. هدول نسخ قديمة او مكررة من ملفات موجودة بمكانها الصحيح.
+### 1.7 مسار تجربة النظام
 
-Quick demo path: seed DB, start backend, start front end, sign in as `student1@uni.edu` (page 1), place an order; sign in as `kitchen@uni.edu` (staff page) and mark preparing then ready; as the customer read the pickup code in "My orders"; as `cashier@uni.edu` hand it over with order number and code.
+1. أنشئ قاعدة البيانات التجريبية وشغّل الـ Backend والـ Frontend.
+2. سجّل الدخول بحساب الزبون `student1@uni.edu`، ثم اختر صنفاً وموعد استلام وأرسل الطلب.
+3. افتح صفحة الموظفين بحساب `kitchen@uni.edu`، وانقل الطلب إلى حالتي `preparing` ثم `ready`.
+4. ارجع إلى حساب الزبون لعرض رمز الاستلام المكوّن من أربعة أرقام.
+5. استخدم حساب الكاشير `cashier@uni.edu` للتحقق من الرمز وتسليم الطلب.
 
----
 
 ## 2. Project in 5 lines
 
