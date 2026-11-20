@@ -1,7 +1,7 @@
 # PM_CSP27
 CafeQuick: Cafeteria Pre-Order & Pickup System (SE440 capstone, JUST)
 
-Contents: 1 Run locally | 2 Project in 5 lines | 3 Architecture and file map | 4 Business rules and where they live | 5 Walkthrough of place_order | 6 Concepts you must be able to explain | 7 Order life cycle | 8 Accounts and roles | 9 REST API | 10 Tests | 11 Front end | 12 Gaps vs the brief (be honest in the exam) | 13 Likely exam questions | 14 Presentation outline | 15 Sources to study | 16 Diagrams (PMP 5 and 6)
+Contents: 1 Run locally | 2 Project in 5 lines | 3 Architecture and file map | 4 Business rules and where they live | 5 Walkthrough of place_order | 6 Concepts you must be able to explain | 7 Order life cycle | 8 Accounts and roles | 9 REST API | 10 Tests | 11 Front end | 12 Gaps vs the brief (be honest in the exam) | 13 Likely exam questions | 14 Presentation outline | 15 Sources to study | 16 Diagrams (PMP 5 and 6; legacy) | 17 CafeQuick — Architecture Diagrams and ADRs
 
 ---
 
@@ -787,3 +787,232 @@ flowchart LR
     ci -.->|"staff account is refused"| me
     si -.->|"customer account is refused"| me
 ```
+
+
+---
+
+# 17. CafeQuick — Architecture Diagrams and ADRs
+
+This section is the reviewed architecture baseline for the current prototype. It supersedes the older, optimistic context/deployment drawings in Section 16 where they imply integrations or infrastructure that are not implemented. Dashed arrows mean planned or not integrated. The diagrams describe the current implementation unless explicitly labelled target.
+
+## 17.1 Review findings and status
+
+- **Identity:** the current API trusts the `X-User-Email` request header. This is a development simulation, not authentication. University OpenID Connect (OIDC) is planned but not integrated.
+- **Notifications:** the ready-order notification is currently a print/log stub. No e-mail or push provider is integrated.
+- **Runtime:** the system is a modular monolith: static frontend, FastAPI API, account router and APScheduler job. The scheduler runs in the API process; use one Uvicorn worker in the current deployment model.
+- **Database:** SQLite is the default for development/tests. PostgreSQL can be selected through `DATABASE_URL`; PostgreSQL advisory locking is used conditionally for slot serialization. SQLite tests do not prove PostgreSQL concurrency correctness.
+- **Operations:** TLS/reverse proxy, hourly backups and restore rehearsal, monitoring, OWASP assessment and automated deployment are target/pilot requirements, not verified operational capabilities.
+- **Business-rule note:** the implementation also has an automatic refund path for stuck `placed`/`preparing` orders. This is additional behavior beyond the brief and needs TA/sponsor confirmation.
+
+## 17.2 D1 — System context
+
+```mermaid
+flowchart LR
+    customer["Customer"]
+    kitchen["Kitchen staff"]
+    cashier["Cashier"]
+    manager["Manager"]
+    admin["Administrator"]
+    cq["CafeQuick web application"]
+    customer -->|"browse, order, cancel, view ready code"| cq
+    kitchen -->|"view queue, prepare, mark ready, withdraw"| cq
+    cashier -->|"verify pickup, top up wallet"| cq
+    manager -->|"manage menu/stock, view daily report"| cq
+    admin -->|"view audit log, trigger job"| cq
+    idp["University identity provider (planned OIDC)"]
+    notify["Notification provider (planned)"]
+    cq -.->|"not integrated; identity simulated by X-User-Email"| idp
+    cq -.->|"not integrated; ready notification is log/print stub"| notify
+```
+
+## 17.3 D2 — Container / logical architecture (implemented)
+
+```mermaid
+flowchart TB
+    browser["User browser"]
+    subgraph app["CafeQuick — single deployable application"]
+        frontend["Static frontend<br/>HTML, CSS, JavaScript"]
+        api["FastAPI REST API<br/>Backend/main.py"]
+        accounts["Account router<br/>Backend/accounts.py"]
+        scheduler["APScheduler job<br/>inside API process"]
+    end
+    db[("Relational database<br/>SQLite default for dev/tests<br/>PostgreSQL supported by DATABASE_URL")]
+    browser -->|"HTTP in local demo; HTTPS not yet configured"| frontend
+    frontend -->|"JSON REST + X-User-Email header"| api
+    api --- accounts
+    api --> db
+    scheduler -->|"updates overdue orders, strikes, audit"| db
+    api -.->|"No real OIDC integration"| idp["OIDC provider — planned"]
+    api -.->|"No real notification integration"| msg["Email/push — planned"]
+```
+
+## 17.4 D3 — Deployment view (target, not yet verified)
+
+```mermaid
+flowchart TB
+    user["Supported browsers / mobile"]
+    proxy["TLS reverse proxy — required for pilot"]
+    static["Static frontend hosting"]
+    uv["One Uvicorn worker<br/>FastAPI + APScheduler"]
+    pg[("PostgreSQL pilot database")]
+    backup["Hourly backup + restore rehearsal"]
+    ci["CI/CD pipeline — not yet implemented"]
+    idp["University OIDC provider"]
+    notify["Notification service"]
+    user -->|"HTTPS"| proxy
+    proxy --> static
+    proxy --> uv
+    uv --> pg
+    backup --> pg
+    ci -.->|"planned deployment"| uv
+    uv -.->|"planned integration"| idp
+    uv -.->|"planned integration"| notify
+```
+
+## 17.5 D4 — Entity relationship diagram
+
+```mermaid
+erDiagram
+    USER ||--o| WALLET : owns
+    USER ||--o{ ORDER : places
+    USER ||--o{ STRIKE : receives
+    USER ||--o{ AUDITENTRY : performs
+    WALLET ||--o{ WALLETTRANSACTION : records
+    ORDER ||--|{ ORDERLINE : contains
+    ORDER ||--o| STRIKE : may_cause
+    MENUITEM ||--o{ ORDERLINE : referenced_by
+    USER { int id PK string email UK string role datetime blocked_until }
+    WALLET { int id PK int user_id FK int balance_fils }
+    WALLETTRANSACTION { int id PK int wallet_id FK int amount_fils string kind string reference datetime time }
+    MENUITEM { int id PK string name int price_fils int stock string tags boolean available }
+    ORDER { int id PK int customer_id FK datetime slot_start string state int total_fils string pickup_code datetime ready_at datetime closed_at }
+    ORDERLINE { int id PK int order_id FK int item_id FK int quantity int unit_price_snapshot_fils }
+    STRIKE { int id PK int user_id FK int order_id FK datetime time }
+    AUDITENTRY { int id PK int actor_id FK string action string target datetime timestamp }
+```
+
+## 17.6 D5 — Order lifecycle
+
+```mermaid
+stateDiagram-v2
+    [*] --> placed : customer order accepted
+    placed --> preparing : kitchen starts
+    preparing --> ready : kitchen marks ready
+    ready --> collected : cashier verifies pickup code
+    ready --> uncollected : cutoff reached; strike; no refund
+    placed --> cancelled : customer cancellation / kitchen withdrawal
+    preparing --> cancelled : system timeout refund rule (extra implementation)
+    cancelled --> [*]
+    collected --> [*]
+    uncollected --> [*]
+```
+
+## 17.7 D6 — Place-order sequence and transaction boundary
+
+```mermaid
+sequenceDiagram
+    actor C as Customer
+    participant FE as Browser frontend
+    participant API as FastAPI
+    participant DB as SQL database
+    C->>FE: select items and pickup slot
+    FE->>API: POST /orders + X-User-Email
+    API->>API: validate role, slot, lead time, block
+    API->>DB: BEGIN
+    opt PostgreSQL
+      API->>DB: acquire transaction advisory lock for slot
+    end
+    API->>DB: count slot orders and customer's active order
+    API->>DB: lock item rows in item_id order
+    API->>DB: validate/decrement stock
+    API->>DB: lock wallet, validate/debit balance
+    API->>DB: insert order, lines, ledger row, audit row
+    API->>DB: COMMIT
+    API-->>FE: order id and total
+    Note over DB: Any exception rolls back all related changes
+```
+
+## 17.8 D7 — Kitchen ready and cashier pickup
+
+```mermaid
+sequenceDiagram
+    actor K as Kitchen
+    actor C as Customer
+    actor S as Cashier
+    participant FE as Browser
+    participant API as FastAPI
+    participant DB as Database
+    K->>FE: select preparing / ready action
+    FE->>API: POST state transition
+    API->>DB: update state + audit in transaction
+    API-->>FE: success
+    Note over API: Ready notification is currently a print/log stub
+    C->>FE: refresh own orders
+    FE->>API: GET /orders/mine
+    API-->>FE: pickup code only when state=ready
+    C->>S: present code
+    S->>FE: enter order id and code
+    FE->>API: POST /orders/{id}/pickup
+    API->>DB: lock order, verify ready state and code
+    API->>DB: mark collected + audit
+    API-->>FE: collected
+```
+
+## 17.9 D8 — Scheduled uncollected-order processing
+
+```mermaid
+sequenceDiagram
+    participant APS as APScheduler
+    participant JOB as mark_uncollected_orders
+    participant DB as Database
+    APS->>JOB: invoke every minute in configured hours
+    JOB->>DB: begin transaction / select overdue orders
+    loop each eligible order
+      JOB->>DB: lock order and re-check state/cutoff
+      JOB->>DB: ready -> uncollected; insert strike and audit
+      opt third strike in rolling 30 days
+        JOB->>DB: set blocked_until (7 days) if no active block
+      end
+      opt placed/preparing timeout rule
+        JOB->>DB: refund, restore stock, cancel and audit
+      end
+    end
+    JOB->>DB: commit
+    Note over APS,DB: Run one application worker in current deployment model
+```
+
+## 17.10 Architecture Decision Records (ADRs)
+
+### ADR-001 — Modular monolith
+**Status:** Accepted. Keep one FastAPI deployable with separate modules/routers. This fits a small capstone team and preserves shared transaction boundaries. Trade-off: modules share one deployment and must maintain clear interfaces.
+
+### ADR-002 — Relational persistence with SQLModel / SQLAlchemy
+**Status:** Accepted. Use relational tables and constraints; SQLite for local development/tests and PostgreSQL for pilot. The domain requires transactions, foreign keys and constraints. SQLite does not prove PostgreSQL row-lock behavior; PostgreSQL integration tests are required.
+
+### ADR-003 — Atomic order placement and database-enforced invariants
+**Status:** Accepted. Reserve stock, debit wallet, create order/lines, ledger and audit records in one transaction. PostgreSQL uses a transaction advisory lock per slot and row locks for stock/wallet. Validate the concurrency strategy against PostgreSQL before pilot.
+
+### ADR-004 — Static browser frontend with REST/JSON API
+**Status:** Accepted. Use static HTML/CSS/JavaScript pages calling FastAPI. The backend remains authoritative for authorization and business rules. Client-side checks are usability only, never security controls.
+
+### ADR-005 — Simulated identity in development; OIDC for pilot
+**Status:** Temporary development decision; production decision pending. Current `X-User-Email` is forgeable. Replace it with university OIDC, validate tokens and derive identity server-side. This is a pilot release blocker.
+
+### ADR-006 — APScheduler in the API process
+**Status:** Accepted for prototype; deployment constraint. Run the job inside the API process and use one Uvicorn worker. For multi-worker deployment, move scheduling to a dedicated worker or add distributed coordination.
+
+### ADR-007 — Integer fils and wallet transaction ledger
+**Status:** Accepted. Store money as integer fils and record top-up/payment/refund ledger rows. Reconcile cached wallet balance to ledger totals and test concurrent spending.
+
+### ADR-008 — Notification integration deferred
+**Status:** Accepted as prototype limitation; implementation pending. Ready notification is a print/log stub. Select and integrate an e-mail/push provider before claiming FR-06 notification delivery is complete.
+
+## 17.11 Architecture sign-off checklist
+
+- [ ] Team reviews diagrams against current code and agrees the target architecture.
+- [ ] TA/sponsor confirms the additional placed/preparing timeout-refund behavior.
+- [ ] Replace `X-User-Email` with university OIDC before a real-user pilot.
+- [ ] Select and implement the notification channel; then update D1, D2 and D7.
+- [ ] Verify PostgreSQL concurrency for slot capacity, stock reservation and wallet debit.
+- [ ] Add evidence for TLS, backups/restore, CI/CD and monitoring before updating the deployment view to implemented.
+- [ ] Record ADR authors, dates and team-approved amendments.
